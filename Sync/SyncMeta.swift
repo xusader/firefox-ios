@@ -89,6 +89,13 @@ public class GlobalEnvelope: EnvelopeJSON {
     public lazy var global: MetaGlobal? = {
         return MetaGlobal.fromPayload(self.payload)
     }()
+
+    public func toFetched() -> Fetched<MetaGlobal>? {
+        if let g = global {
+            return Fetched(value: g, timestamp: self.modified)
+        }
+        return nil
+    }
 }
 
 /**
