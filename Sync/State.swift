@@ -64,6 +64,14 @@ public class Scratchpad {
         self.init(b: b, m: fetchedGlobal, k: k, modified: modified)
     }
 
+    func withGlobal(m: Fetched<MetaGlobal>) -> Scratchpad {
+        return Scratchpad(b: self.syncKeyBundle, m: m, k: self.keys, modified: self.modified)
+    }
+
+    func withGlobal(m: MetaGlobal, t: UInt64) -> Scratchpad {
+        return withGlobal(Fetched(value: m, timestamp: t))
+    }
+
     func withGlobal(m: GlobalEnvelope) -> Scratchpad {
         return Scratchpad(b: self.syncKeyBundle, m: m, k: self.keys, modified: self.modified)
     }
