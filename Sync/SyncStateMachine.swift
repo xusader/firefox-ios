@@ -5,6 +5,10 @@
 import Foundation
 import Shared
 import Account
+import XCGLogger
+
+// TODO: same comment as for SyncAuthState.swift!
+private let log = XCGLogger.defaultInstance()
 
 public typealias TokenSource = () -> Deferred<Result<TokenServerToken>>
 
@@ -17,8 +21,10 @@ public typealias TokenSource = () -> Deferred<Result<TokenServerToken>>
 // The resultant 'Ready' will have a suitably initialized storage client.
 public class SyncStateMachine {
     public class func getInfoCollections(authState: SyncAuthState) -> Deferred<Result<InfoCollections>> {
+        log.debug("Fetching info/collections in state machine.")
         let token = authState.token(NSDate.now(), canBeExpired: true)
         return chainDeferred(token, { (token, kB) in
+            log.debug("Got token from auth state.")
             let state = InitialWithExpiredToken(scratchpad: Scratchpad(b: KeyBundle.fromKB(kB)), token: token)
             return state.getInfoCollections()
         })
@@ -27,6 +33,7 @@ public class SyncStateMachine {
     public class func toReady(authState: SyncAuthState) -> Deferred<Result<Ready>> {
         let token = authState.token(NSDate.now(), canBeExpired: false)
         return chainDeferred(token, { (token, kB) in
+            log.debug("Got token from auth state. Server is \(token.api_endpoint).")
             let state = InitialWithLiveToken(scratchpad: Scratchpad(b: KeyBundle.fromKB(kB)), token: token)
             return advanceSyncState(state)
         })
@@ -114,6 +121,7 @@ public class BaseSyncState: SyncState {
         self.scratchpad = scratchpad
         self.token = token
         self.client = client
+        log.info("Inited \(self.label.rawValue)")
     }
 
     init(scratchpad: Scratchpad, token: TokenServerToken) {
@@ -123,6 +131,7 @@ public class BaseSyncState: SyncState {
         self.scratchpad = scratchpad
         self.token = token
         self.client = client
+        log.info("Inited \(self.label.rawValue)")
     }
 }
 
