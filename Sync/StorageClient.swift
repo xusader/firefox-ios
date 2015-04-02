@@ -7,7 +7,9 @@ import Alamofire
 import Shared
 import Account
 
-public class ServerResponseError<T>: ErrorType {
+// Not an error that indicates a server problem, but merely an
+// error that encloses a StorageResponse.
+public class StorageResponseError<T>: ErrorType {
     public let response: StorageResponse<T>
 
     public init(_ response: StorageResponse<T>) {
@@ -32,7 +34,7 @@ public class RequestError: ErrorType {
     }
 }
 
-public class BadRequestError<T>: ServerResponseError<T> {
+public class BadRequestError<T>: StorageResponseError<T> {
     public let request: NSURLRequest
 
     public init(request: NSURLRequest, response: StorageResponse<T>) {
@@ -45,7 +47,7 @@ public class BadRequestError<T>: ServerResponseError<T> {
     }
 }
 
-public class ServerError<T>: ServerResponseError<T> {
+public class ServerError<T>: StorageResponseError<T> {
     override public var description: String {
         return "Server error."
     }
@@ -172,15 +174,15 @@ private func errorWrap<T>(deferred: Deferred<Result<T>>, handler: ResponseHandle
         }
 
         println("Status code: \(response!.statusCode)")
+        let err = StorageResponse(value: response!, metadata: ResponseMetadata(response: response!))
+
         if response!.statusCode >= 500 {
-            let err = StorageResponse(value: response!, metadata: ResponseMetadata(response: response!))
             let result = Result<T>(failure: ServerError(err))
             deferred.fill(result)
             return
         }
 
         if response!.statusCode >= 400 {
-            let err = StorageResponse(value: response!, metadata: ResponseMetadata(response: response!))
             let result = Result<T>(failure: BadRequestError(request: request, response: err))
             deferred.fill(result)
             return
