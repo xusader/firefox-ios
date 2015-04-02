@@ -47,6 +47,7 @@ public enum SyncStateLabel: String {
     case InitialWithExpiredTokenAndInfo = "initialWithExpiredTokenAndInfo"
     case InitialWithLiveToken = "initialWithLiveToken"
     case InitialWithLiveTokenAndInfo = "initialWithLiveTokenAndInfo"
+    case ResolveMetaGlobal = "resolveMetaGlobal"
     case HasMetaGlobal = "hasMetaGlobal"
     case Restart = "restart"                                  // Go around again... once only, perhaps.
     case Ready = "ready"
@@ -62,6 +63,7 @@ public enum SyncStateLabel: String {
         InitialWithExpiredTokenAndInfo,
         InitialWithLiveToken,
         InitialWithLiveTokenAndInfo,
+        ResolveMetaGlobal,
         HasMetaGlobal,
         Restart,
         Ready,
@@ -154,13 +156,19 @@ public class BaseSyncStateWithInfo: BaseSyncState {
  */
 public protocol SyncError: ErrorType {}
 
-public class CouldNotFetchMetaGlobalError: SyncError, ErrorType {
+public class UnknownError: SyncError {
+    public var description: String {
+        return "Unknown error."
+    }
+}
+
+public class CouldNotFetchMetaGlobalError: SyncError {
     public var description: String {
         return "Could not fetch meta/global."
     }
 }
 
-public class CouldNotFetchKeysError: SyncError, ErrorType {
+public class CouldNotFetchKeysError: SyncError {
     public var description: String {
         return "Could not fetch crypto/keys."
     }
@@ -325,12 +333,80 @@ public class InitialWithLiveToken: BaseSyncState {
     }
 }
 
+/**
+ * Each time we fetch a new meta/global, we need to reconcile it with our
+ * current state.
+ *
+ * It might be identical to our current meta/global, in which case we can short-circuit.
+ *
+ * We might have no previous meta/global at all, in which case this state
+ * simply configures local storage to be ready to sync according to the
+ * supplied meta/global. (Not necessarily datatype elections: those will be per-device.)
+ *
+ * Or it might be different. In this case the previous m/g and our local user preferences
+ * are compared to the new, resulting in some actions and a final state.
+ *
+ * TODO
+ */
+public class ResolveMetaGlobal: BaseSyncStateWithInfo {
+    public override var label: SyncStateLabel { return SyncStateLabel.ResolveMetaGlobal }
+
+    let fetched: Fetched<MetaGlobal>
+
+    init(fetched: Fetched<MetaGlobal>, client: Sync15StorageClient, scratchpad: Scratchpad, token: TokenServerToken, info: InfoCollections) {
+        self.fetched = fetched
+        super.init(client: client, scratchpad: scratchpad, token: token, info: info)
+    }
+
+    class func fromState(state: BaseSyncStateWithInfo, fetched: Fetched<MetaGlobal>) -> ResolveMetaGlobal {
+        return ResolveMetaGlobal(fetched: fetched, client: state.client, scratchpad: state.scratchpad, token: state.token, info: state.info)
+    }
+
+    func advance() -> Deferred<Result<HasMetaGlobal>> {
+        // TODO: detect when the global syncID has changed.
+        // TODO: detect when an individual collection syncID has changed, and make sure that
+        //       collection is reset.
+        // TODO: detect when the sets of declined or enabled engines have changed, and update
+        //       our preferences accordingly.
+
+        let s = self.scratchpad.withGlobal(fetched)
+        let state = HasMetaGlobal.fromState(self, scratchpad: s)
+
+        return Deferred(value: Result(success: state))
+    }
+}
+
 public class InitialWithLiveTokenAndInfo: BaseSyncStateWithInfo {
     public override var label: SyncStateLabel { return SyncStateLabel.InitialWithLiveTokenAndInfo }
 
+    private func processFailure(failure: ErrorType?) -> ErrorType {
+        if let failure = failure as? NotFound<StorageResponse<GlobalEnvelope>> {
+            // OK, this is easy.
+            // This state is responsible for creating the new m/g, uploading it, and
+            // restarting with a clean scratchpad.
+            return MissingMetaGlobalError(previousState: self)
+        }
+
+        // TODO: backoff etc. for all of these.
+        if let failure = failure as? ServerError<StorageResponse<GlobalEnvelope>> {
+            // Be passive.
+            return failure
+        }
+
+        if let failure = failure as? BadRequestError<StorageResponse<GlobalEnvelope>> {
+            // Uh oh.
+            log.error("Bad request. Bailing out. \(failure.description)")
+            return failure
+        }
+
+        log.error("Unexpected failure. \(failure?.description)")
+        return failure ?? UnknownError()
+    }
+
     func advanceToMG() -> Deferred<Result<HasMetaGlobal>> {
         // Cached and not changed in i/c? Use that.
-        // This check is inaccurate (particularly if a migration indicator is present).
+        // This check would be inaccurate if any other fields were stored in meta/; this
+        // has been the case in the past, with the Sync 1.1 migration indicator.
         if let global = self.scratchpad.global {
             if let metaModified = self.info.modified("meta") {
                 if global.timestamp == metaModified {
@@ -344,21 +420,19 @@ public class InitialWithLiveTokenAndInfo: BaseSyncStateWithInfo {
         }
 
         // Fetch.
-        // TODO: detect when the global syncID has changed.
-        // TODO: detect when an individual collection syncID has changed, and make sure that
-        //       collection is reset.
-        // TODO: detect when the sets of declined or enabled engines have changed, and update
-        //       our preferences accordingly.
-        return self.client.getMetaGlobal().map { result in
+        return self.client.getMetaGlobal().bind { result in
             if let resp = result.successValue?.value {
-                let newState = HasMetaGlobal.fromState(self, scratchpad: self.scratchpad.withGlobal(resp))
-                return Result(success: newState)
+                if let fetched = resp.toFetched() {
+                    let next = ResolveMetaGlobal.fromState(self, fetched: fetched)
+                    return next.advance()
+                }
+
+                // This should not occur.
+                log.error("Unexpectedly no meta/global despite a successful fetch.")
             }
 
-            // TODO: create, upload, go to Restart?
-            // Or should we return an intermediate state to allow a graceful exit?
-            // Remember to return a restarted scratchpad, too.
-            return Result(failure: result.failureValue!)
+            // Otherwise, we have a failure state.
+            return Deferred(value: Result(failure: self.processFailure(result.failureValue)))
         }
     }
 
