@@ -57,6 +57,16 @@ public class ServerError<T>: StorageResponseError<T> {
     }
 }
 
+public class NotFound<T>: StorageResponseError<T> {
+    override public var description: String {
+        return "Not found."
+    }
+
+    override public init(_ response: StorageResponse<T>) {
+        super.init(response)
+    }
+}
+
 public class RecordParseError : ErrorType {
     public var description: String {
         return "Failed to parse record."
@@ -178,6 +188,12 @@ private func errorWrap<T>(deferred: Deferred<Result<T>>, handler: ResponseHandle
 
         if response!.statusCode >= 500 {
             let result = Result<T>(failure: ServerError(err))
+            deferred.fill(result)
+            return
+        }
+
+        if response!.statusCode == 404 {
+            let result = Result<T>(failure: NotFound(err))
             deferred.fill(result)
             return
         }
