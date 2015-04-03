@@ -22,11 +22,16 @@ public struct Fetched<T> {
  * The scratchpad consists of the following:
  *
  * 1. Cached records. We cache meta/global and crypto/keys until they change.
- * 2. Metadata like timestamps.
+ * 2. Metadata like timestamps, both for cached records and for server fetches.
+ * 3. User preferences -- engine enablement.
+ * 4. Client record state.
  *
  * Note that the scratchpad itself is immutable, but is a class passed by reference.
  * Its mutable fields can be mutated, but you can't accidentally e.g., switch out
  * meta/global and get confused.
+ *
+ * TODO: the Scratchpad needs to be loaded from persistent storage, and written
+ * back at certain points in the state machine (after a replayable action is taken).
  */
 public class Scratchpad {
     public class Builder {
