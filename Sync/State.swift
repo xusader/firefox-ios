@@ -36,36 +36,40 @@ public class Scratchpad {
     let keys: Fetched<Keys>?
 
     // Collection timestamps.
-    let modified: [String: UInt64]
+    var collectionLastFetched: [String: UInt64]
 
     init(b: KeyBundle) {
         self.syncKeyBundle = b
-        self.modified = [String: UInt64]()
+        self.collectionLastFetched = [String: UInt64]()
     }
 
-    init(b: KeyBundle, m: Fetched<MetaGlobal>?, k: Fetched<Keys>?, modified: [String: UInt64]) {
+    init(b: KeyBundle, m: Fetched<MetaGlobal>?, k: Fetched<Keys>?, fetches: [String: UInt64]) {
         self.syncKeyBundle = b
         self.keys = k
         self.global = m
-        self.modified = modified
+        self.collectionLastFetched = fetches
     }
 
     convenience init(b: KeyBundle, m: Fetched<MetaGlobal>?, k: Fetched<Keys>?) {
-        self.init(b: b, m: m, k: k, modified: [String: UInt64]())
+        self.init(b: b, m: m, k: k, fetches: [String: UInt64]())
     }
 
-    convenience init(b: KeyBundle, m: GlobalEnvelope?, k: Fetched<Keys>?, modified: [String: UInt64]) {
+    convenience init(b: KeyBundle, m: GlobalEnvelope?, k: Fetched<Keys>?, fetches: [String: UInt64]) {
         var fetchedGlobal: Fetched<MetaGlobal>? = nil
         if let m = m {
             if let global = m.global {
                 fetchedGlobal = Fetched<MetaGlobal>(value: global, timestamp: m.modified)
             }
         }
-        self.init(b: b, m: fetchedGlobal, k: k, modified: modified)
+        self.init(b: b, m: fetchedGlobal, k: k, fetches: fetches)
     }
 
-    func withGlobal(m: Fetched<MetaGlobal>) -> Scratchpad {
-        return Scratchpad(b: self.syncKeyBundle, m: m, k: self.keys, modified: self.modified)
+    func withGlobal(m: Fetched<MetaGlobal>?) -> Scratchpad {
+        let s = Scratchpad(b: self.syncKeyBundle, m: m, k: self.keys, fetches: self.collectionLastFetched)
+        if let timestamp = m?.timestamp {
+            s.collectionLastFetched["meta"] = timestamp
+        }
+        return s
     }
 
     func withGlobal(m: MetaGlobal, t: UInt64) -> Scratchpad {
@@ -73,11 +77,13 @@ public class Scratchpad {
     }
 
     func withGlobal(m: GlobalEnvelope) -> Scratchpad {
-        return Scratchpad(b: self.syncKeyBundle, m: m, k: self.keys, modified: self.modified)
+        return withGlobal(m.toFetched())
     }
 
     func withKeys(k: Keys, t: UInt64) -> Scratchpad {
         let f = Fetched(value: k, timestamp: t)
-        return Scratchpad(b: self.syncKeyBundle, m: self.global, k: f, modified: self.modified)
+        let s = Scratchpad(b: self.syncKeyBundle, m: self.global, k: f, fetches: self.collectionLastFetched)
+        s.collectionLastFetched["crypto"] = t
+        return s
     }
 }
