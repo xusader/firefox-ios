@@ -104,7 +104,7 @@ public class Scratchpad {
     var collectionLastFetched: [String: UInt64]
 
     // Enablement states.
-    let engineConfiguration: EngineConfiguration?       // TODO: should this be optional?
+    let engineConfiguration: EngineConfiguration?
 
     // When did we last upload our client record?
     let clientRecordLastUpload: UInt64
@@ -142,43 +142,7 @@ public class Scratchpad {
         self.clientName = Scratchpad.defaultClientName()
     }
 
-    /*
-    convenience init(b: KeyBundle, m: Fetched<MetaGlobal>?, k: Fetched<Keys>?, fetches: [String: UInt64]) {
-        self.init(b: b, m: m, k: k, fetches: fetches, engines: nil, clientUpload: 0, clientName: Scratchpad.defaultClientName())
-    }
-
-    convenience init(b: KeyBundle, m: Fetched<MetaGlobal>?, k: Fetched<Keys>?) {
-        self.init(b: b, m: m, k: k, fetches: [String: UInt64]())
-    }
-
-    convenience init(b: KeyBundle, m: GlobalEnvelope?, k: Fetched<Keys>?, fetches: [String: UInt64]) {
-        var fetchedGlobal: Fetched<MetaGlobal>? = nil
-        if let m = m {
-            if let global = m.global {
-                fetchedGlobal = Fetched<MetaGlobal>(value: global, timestamp: m.modified)
-            }
-        }
-        self.init(b: b, m: fetchedGlobal, k: k, fetches: fetches)
-    }
-    */
-
     func withGlobal(m: Fetched<MetaGlobal>?) -> Scratchpad {
         return self.evolve().setGlobal(m).build()
-    }
-
-    func withGlobal(m: MetaGlobal, t: UInt64) -> Scratchpad {
-        return withGlobal(Fetched(value: m, timestamp: t))
-    }
-
-    func withGlobal(m: GlobalEnvelope) -> Scratchpad {
-        return withGlobal(m.toFetched())
-    }
-
-    func withKeys(k: Fetched<Keys>?) -> Scratchpad {
-        return self.evolve().setKeys(k).build()
-    }
-
-    func withKeys(k: Keys, t: UInt64) -> Scratchpad {
-        return withKeys(Fetched(value: k, timestamp: t))
     }
 }
