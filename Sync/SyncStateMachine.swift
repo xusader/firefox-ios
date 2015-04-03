@@ -10,6 +10,14 @@ import XCGLogger
 // TODO: same comment as for SyncAuthState.swift!
 private let log = XCGLogger.defaultInstance()
 
+private let STORAGE_VERSION_CURRENT = 5
+private let ENGINES_DEFAULT: [String: Int] = ["tabs": 1]
+private let DECLINED_DEFAULT: [String] = [String]()
+
+private func getDefaultEngines() -> [String: EngineMeta] {
+    return mapValues(ENGINES_DEFAULT, { EngineMeta(version: $0, syncID: Bytes.generateGUID()) })
+}
+
 public typealias TokenSource = () -> Deferred<Result<TokenServerToken>>
 
 // See docs in docs/sync.md.
@@ -20,6 +28,8 @@ public typealias TokenSource = () -> Deferred<Result<TokenServerToken>>
 // some state from the last.
 // The resultant 'Ready' will have a suitably initialized storage client.
 public class SyncStateMachine {
+    // TODO: unbundle persisted values into the Scratchpad.
+
     public class func getInfoCollections(authState: SyncAuthState) -> Deferred<Result<InfoCollections>> {
         log.debug("Fetching info/collections in state machine.")
         let token = authState.token(NSDate.now(), canBeExpired: true)
@@ -119,14 +129,15 @@ public class BaseSyncState: SyncState {
         })
     }
 
-    init(client: Sync15StorageClient, scratchpad: Scratchpad, token: TokenServerToken) {
+    public init(client: Sync15StorageClient, scratchpad: Scratchpad, token: TokenServerToken) {
         self.scratchpad = scratchpad
         self.token = token
         self.client = client
         log.info("Inited \(self.label.rawValue)")
     }
 
-    init(scratchpad: Scratchpad, token: TokenServerToken) {
+    // This isn't a convenience initializer 'cos subclasses can't call convenience initializers.
+    public init(scratchpad: Scratchpad, token: TokenServerToken) {
         let workQueue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0)
         let resultQueue = dispatch_get_main_queue()
         let client = Sync15StorageClient(token: token, workQueue: workQueue, resultQueue: resultQueue)
@@ -231,7 +242,7 @@ public class SyncIDChangedError: RecoverableSyncState {
 
     public func advance() -> Deferred<Result<SyncState>> {
         // TODO: mutate local storage to allow for a fresh start.
-        let s = Scratchpad(b: self.previousState.scratchpad.syncKeyBundle, m: self.newMetaGlobal, k: nil)
+        let s = self.previousState.scratchpad.evolve().setGlobal(self.newMetaGlobal).setKeys(nil).build()
         let state = HasMetaGlobal(client: self.previousState.client, scratchpad: s, token: self.previousState.token, info: self.previousState.info)
         return Deferred(value: Result(success: state))
     }
@@ -254,16 +265,27 @@ public class MissingMetaGlobalError: RecoverableSyncState {
         self.previousState = previousState
     }
 
-    public func advance() -> Deferred<Result<SyncState>> {
-        // TODO: mutate local storage to allow for a fresh start.
-        let s = Scratchpad(b: self.previousState.scratchpad.syncKeyBundle, m: nil, k: nil)
+    // TODO: this needs EnginePreferences.
+    private class func createMetaGlobal(previous: MetaGlobal?, scratchpad: Scratchpad) -> MetaGlobal {
+        return MetaGlobal(syncID: Bytes.generateGUID(), storageVersion: STORAGE_VERSION_CURRENT, engines: getDefaultEngines(), declined: DECLINED_DEFAULT)
+    }
 
-        // Note that we discard the previous info/collections -- after all, we just wiped storage.
-        let wipe = self.previousState.client.wipeStorage()
-        return chain(wipe, { resp in
-            // TODO: upload new meta/global.
-            return InitialWithLiveToken(client: self.previousState.client, scratchpad: s, token: self.previousState.token)
-        })
+    private func onWiped(resp: StorageResponse<JSON>, s: Scratchpad) -> Deferred<Result<SyncState>> {
+        // Upload a new meta/global.
+        // Note that we discard info/collections -- we just wiped storage.
+        return Deferred(value: Result(success: InitialWithLiveToken(client: self.previousState.client, scratchpad: s, token: self.previousState.token)))
+    }
+
+    private func advanceFromWiped(wipe: Deferred<Result<StorageResponse<JSON>>>) -> Deferred<Result<SyncState>> {
+        // TODO: mutate local storage to allow for a fresh start.
+        // Note that we discard the previous global and keys -- after all, we just wiped storage.
+
+        let s = self.previousState.scratchpad.evolve().setGlobal(nil).setKeys(nil).build()
+        return chainDeferred(wipe, { self.onWiped($0, s: s) })
+    }
+
+    public func advance() -> Deferred<Result<SyncState>> {
+        return self.advanceFromWiped(self.previousState.client.wipeStorage())
     }
 }
 
@@ -285,6 +307,11 @@ public class InvalidKeysError: ErrorType {
 
 public class InitialWithExpiredToken: BaseSyncState {
     public override var label: SyncStateLabel { return SyncStateLabel.InitialWithExpiredToken }
+
+    // This looks totally redundant, but try taking it out, I dare you.
+    public override init(scratchpad: Scratchpad, token: TokenServerToken) {
+        super.init(scratchpad: scratchpad, token: token)
+    }
 
     func advanceWithInfo(info: InfoCollections) -> InitialWithExpiredTokenAndInfo {
         return InitialWithExpiredTokenAndInfo(scratchpad: self.scratchpad, token: self.token, info: info)
@@ -323,6 +350,16 @@ public class InitialWithExpiredTokenAndInfo: BaseSyncStateWithInfo {
 
 public class InitialWithLiveToken: BaseSyncState {
     public override var label: SyncStateLabel { return SyncStateLabel.InitialWithLiveToken }
+
+    // This looks totally redundant, but try taking it out, I dare you.
+    public override init(scratchpad: Scratchpad, token: TokenServerToken) {
+        super.init(scratchpad: scratchpad, token: token)
+    }
+
+    // This looks totally redundant, but try taking it out, I dare you.
+    public override init(client: Sync15StorageClient, scratchpad: Scratchpad, token: TokenServerToken) {
+        super.init(client: client, scratchpad: scratchpad, token: token)
+    }
 
     func advanceWithInfo(info: InfoCollections) -> InitialWithLiveTokenAndInfo {
         return InitialWithLiveTokenAndInfo(scratchpad: self.scratchpad, token: self.token, info: info)
