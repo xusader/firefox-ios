@@ -7,7 +7,7 @@ import Shared
 
 // A base protocol for something that can be cleared.
 protocol Clearable {
-    func clear() -> Deferred<Result<()>>
+    func clear() -> Success
 }
 
 class ClearableError : ErrorType {
@@ -26,19 +26,18 @@ class HistoryClearable : Clearable {
         self.profile = profile
     }
 
-    func clear() -> Deferred<Result<()>> {
-        let deferred = Deferred<Result<()>>()
-        profile.history.clear({ success in
+    // TODO: This can be cleaned up!
+    func clear() -> Success {
+        let deferred = Success()
+        profile.history.clearHistory().upon { success in
             self.profile.thumbnails.clear({ success in
                 SDImageCache.sharedImageCache().clearDisk()
                 SDImageCache.sharedImageCache().clearMemory()
-                self.profile.favicons.clear(nil, complete: { success in
-                    deferred.fill(success ? Result<()>(success: ()) :
-                                            Result<()>(failure: ClearableError(msg: "Could not clear favicons")))
-                    return
-                })
+                self.profile.favicons.clearFavicons().upon {
+                    deferred.fill($0)
+                }
             })
-        })
+        }
         return deferred
     }
 }
@@ -51,10 +50,10 @@ class PasswordsClearable : Clearable {
         self.profile = profile
     }
 
-    func clear() -> Deferred<Result<()>> {
-        let deferred = Deferred<Result<()>>()
+    func clear() -> Success {
+        let deferred = Success()
         // Clear our storage
-        profile.passwords.removeAll() { success in
+        return profile.logins.removeAll() >>== { res in
             let storage = NSURLCredentialStorage.sharedCredentialStorage()
             let credentials = storage.allCredentials
             for (space, credentials) in credentials {
@@ -62,10 +61,8 @@ class PasswordsClearable : Clearable {
                     storage.removeCredential(credential, forProtectionSpace: space as! NSURLProtectionSpace)
                 }
             }
-            deferred.fill(success ? Result<()>(success: ()) :
-                                    Result<()>(failure: ClearableError(msg: "Could not clear passwords")))
+            return succeed()
         }
-        return deferred
     }
 }
 
@@ -77,7 +74,7 @@ class CacheClearable : Clearable {
         self.tabManager = tabManager
     }
 
-    func clear() -> Deferred<Result<()>> {
+    func clear() -> Success {
         // First ensure we close all open tabs first.
         tabManager.removeAll()
 
@@ -95,7 +92,7 @@ class CacheClearable : Clearable {
                 NSFileManager.defaultManager().removeItemAtPath(filePath, error: &error)
             }
         }
-        return Deferred(value: Result<()>(success: ()))
+        return succeed()
     }
 }
 
@@ -106,7 +103,7 @@ class SiteDataClearable : Clearable {
         self.tabManager = tabManager
     }
 
-    func clear() -> Deferred<Result<()>> {
+    func clear() -> Success {
         // First, close all tabs to make sure they don't hold any thing in memory.
         tabManager.removeAll()
 
@@ -117,7 +114,7 @@ class SiteDataClearable : Clearable {
         var error: NSError? = nil
         NSFileManager.defaultManager().removeItemAtPath(file, error: &error)
 
-        return Deferred(value: Result<()>(success: ()))
+        return succeed()
     }
 }
 
@@ -128,7 +125,7 @@ class CookiesClearable : Clearable {
         self.tabManager = tabManager
     }
 
-    func clear() -> Deferred<Result<()>> {
+    func clear() -> Success {
         // First close all tabs to make sure they aren't holding anything in memory.
         tabManager.removeAll()
 
@@ -152,7 +149,7 @@ class CookiesClearable : Clearable {
             }
         }
 
-        return Deferred(value: Result<()>(success: ()))
+        return succeed()
     }
 }
 
@@ -170,8 +167,8 @@ class EverythingClearable: Clearable {
         ]
     }
 
-    func clear() -> Deferred<Result<()>> {
-        let deferred = Deferred<Result<()>>()
+    func clear() -> Success {
+        let deferred = Success()
         all(clearables.map({ clearable in
             clearable.clear()
         })).upon({ result in

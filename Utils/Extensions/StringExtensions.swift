@@ -4,7 +4,7 @@
 
 import Foundation
 
-extension String {
+public extension String {
     public func contains(other: String) -> Bool {
         // rangeOfString returns nil if other is empty, destroying the analogy with (ordered) sets.
         if other.isEmpty {
@@ -35,6 +35,21 @@ extension String {
             return range.endIndex == self.endIndex
         }
         return false
+    }
+
+    func escape() -> String {
+        var raw: NSString = self
+        var str = CFURLCreateStringByAddingPercentEscapes(kCFAllocatorDefault,
+            raw,
+            "[].",":/?&=;+!@#$()',*",
+            CFStringConvertNSStringEncodingToEncoding(NSUTF8StringEncoding))
+        return str as! String
+    }
+
+    func unescape() -> String {
+        var raw: NSString = self
+        var str = CFURLCreateStringByReplacingPercentEscapes(kCFAllocatorDefault, raw, "[].")
+        return str as! String
     }
 
     public var asURL: NSURL? {

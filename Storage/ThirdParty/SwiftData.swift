@@ -34,7 +34,9 @@
 
 import Foundation
 import UIKit
-import sqlite3
+import XCGLogger
+
+private let log = XCGLogger.defaultInstance()
 
 private let DatabaseBusyTimeout: Int32 = 3 * 1000
 
@@ -45,8 +47,8 @@ private let DatabaseBusyTimeout: Int32 = 3 * 1000
 public class SwiftData {
     let filename: String
 
-    /// Used for testing.
     static var EnableWAL = true
+    static var EnableForeignKeys = true
 
     /// Used for testing.
     static var ReuseConnections = true
@@ -109,15 +111,19 @@ public class SwiftData {
     public func transaction(transactionClosure: (db: SQLiteDBConnection)->Bool) -> NSError? {
         return withConnection(SwiftData.Flags.ReadWriteCreate) { db in
             if let err = db.executeChange("BEGIN EXCLUSIVE") {
+                log.warning("BEGIN EXCLUSIVE failed.")
                 return err
             }
 
             if transactionClosure(db: db) {
+                log.debug("Op in transaction succeeded. Committing.")
                 if let err = db.executeChange("COMMIT") {
+                    log.error("COMMIT failed. Rolling back.")
                     db.executeChange("ROLLBACK")
                     return err
                 }
             } else {
+                log.debug("Op in transaction failed. Rolling back.")
                 if let err = db.executeChange("ROLLBACK") {
                     return err
                 }
@@ -220,8 +226,17 @@ private class SQLiteDBStatement {
         return nil
     }
 
+    func close() {
+        if nil != self.pointer {
+            sqlite3_finalize(self.pointer)
+            self.pointer = nil
+        }
+    }
+
     deinit {
-        sqlite3_finalize(pointer)
+        if nil != self.pointer {
+            sqlite3_finalize(self.pointer)
+        }
     }
 }
 
@@ -234,7 +249,7 @@ public class SQLiteDBConnection {
     public var version: Int {
         get {
             let res = executeQueryUnsafe("PRAGMA user_version", factory: IntFactory)
-            return res[0] as? Int ?? 0
+            return res[0] ?? 0
         }
 
         set {
@@ -252,7 +267,11 @@ public class SQLiteDBConnection {
 
         if SwiftData.EnableWAL {
             let cursor = executeQueryUnsafe("PRAGMA journal_mode=WAL", factory: StringFactory)
-            assert(cursor[0] as! String == "wal", "WAL journal mode set")
+            assert(cursor[0] == "wal", "WAL journal mode set")
+        }
+
+        if SwiftData.EnableForeignKeys {
+            let cursor = executeQueryUnsafe("PRAGMA foreign_keys=ON", factory: IntFactory)
         }
 
         // Retry queries before returning locked errors.
@@ -269,6 +288,13 @@ public class SQLiteDBConnection {
 
     var numberOfRowsModified: Int {
         return Int(sqlite3_changes(sqliteDB))
+    }
+
+    /**
+     * Blindly attempts a WAL checkpoint on all attached databases.
+     */
+    func checkpoint(mode: Int32 = SQLITE_CHECKPOINT_PASSIVE) {
+        sqlite3_wal_checkpoint_v2(sqliteDB, nil, mode, nil, nil)
     }
 
     /// Creates an error from a sqlite status. Will print to the console if debug_enabled is set.
@@ -318,6 +344,8 @@ public class SQLiteDBConnection {
         var error: NSError?
         let statement = SQLiteDBStatement(connection: self, query: sqlStr, args: args, error: &error)
         if let error = error {
+            println("SQL error: \(error.localizedDescription) for SQL \(sqlStr).")
+            statement?.close()
             return error
         }
 
@@ -327,19 +355,27 @@ public class SQLiteDBConnection {
             error = createErr("During: SQL Step \(sqlStr)", status: Int(status))
         }
 
+        statement?.close()
         return error
     }
 
     /// Queries the database.
     /// Returns a cursor pre-filled with the complete result set.
-    func executeQuery<T>(sqlStr: String, factory: ((SDRow) -> T), withArgs args: [AnyObject?]? = nil) -> Cursor {
+    func executeQuery<T>(sqlStr: String, factory: ((SDRow) -> T), withArgs args: [AnyObject?]? = nil) -> Cursor<T> {
         var error: NSError?
         let statement = SQLiteDBStatement(connection: self, query: sqlStr, args: args, error: &error)
         if let error = error {
-            return Cursor(err: error)
+            log.error("SQL error: \(error.localizedDescription).")
+            return Cursor<T>(err: error)
         }
 
-        return FilledSQLiteCursor(statement: statement!, factory: factory)
+        let cursor = FilledSQLiteCursor<T>(statement: statement!, factory: factory)
+
+        // Close, not reset -- this isn't going to be reused, and the cursor has
+        // consumed everything.
+        statement?.close()
+
+        return cursor
     }
 
     /**
@@ -347,7 +383,7 @@ public class SQLiteDBConnection {
      * Returns a live cursor that holds the query statement and database connection.
      * Instances of this class *must not* leak outside of the connection queue!
      */
-    func executeQueryUnsafe<T>(sqlStr: String, factory: ((SDRow) -> T), withArgs args: [AnyObject?]? = nil) -> Cursor {
+    func executeQueryUnsafe<T>(sqlStr: String, factory: ((SDRow) -> T), withArgs args: [AnyObject?]? = nil) -> Cursor<T> {
         var error: NSError?
         let statement = SQLiteDBStatement(connection: self, query: sqlStr, args: args, error: &error)
         if let error = error {
@@ -592,14 +628,12 @@ private class FilledSQLiteCursor<T>: ArrayCursor<T> {
             rows.append(result)
         }
 
-        sqlite3_reset(statement.pointer)
-
         return rows
     }
 }
 
 /// Wrapper around a statement to help with iterating through the results.
-private class LiveSQLiteCursor<T>: Cursor {
+private class LiveSQLiteCursor<T>: Cursor<T> {
     private var statement: SQLiteDBStatement!
 
     // Function for generating objects of type T from a row.
@@ -674,7 +708,7 @@ private class LiveSQLiteCursor<T>: Cursor {
         return columns
     }()
 
-    override subscript(index: Int) -> Any? {
+    override subscript(index: Int) -> T? {
         get {
             if status != .Success {
                 return nil

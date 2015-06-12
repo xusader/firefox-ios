@@ -32,8 +32,14 @@ FILES = [
     "Client/Localizable.strings",
     "Client/search.strings",
     "Extensions/SendTo/SendTo.strings",
-    "Extensions/ShareTo/ShareTo.strings"
+    "Extensions/ShareTo/ShareTo.strings",
+    "Shared/Localizable.strings",
 ]
+
+# Because Xcode is unpredictable. See bug 1162510 - Sync.strings are not imported
+FILENAME_OVERRIDES = {
+    "Shared/Supporting Files/Info.plist": "Shared/Localizable.strings",
+}
 
 def export_xliff_file(file_node, export_path, target_language):
     directory = os.path.dirname(export_path)
@@ -41,22 +47,15 @@ def export_xliff_file(file_node, export_path, target_language):
         os.makedirs(directory)
     with open(export_path, "w") as fp:
         for trans_unit_node in file_node.xpath("x:body/x:trans-unit", namespaces=NS):
-            sources = trans_unit_node.xpath("x:source", namespaces=NS)
+            trans_unit_id = trans_unit_node.get("id")
             targets = trans_unit_node.xpath("x:target", namespaces=NS)
 
-            # Special hack for en-US. If we don't create an en-US.lproj file,
-            # the  system will not default to the base strings but instead
-            # pick some random locale it seems. This needs to be verified. Not
-            # sure if our bug or iOS bug.
-            if target_language == "en-US":
-                targets = sources
-
-            if len(sources) == 1 and len(targets) == 1:
+            if trans_unit_id is not None and len(targets) == 1:
                 notes = trans_unit_node.xpath("x:note", namespaces=NS)
                 if len(notes) == 1:
                     line = u"/* %s */\n" % notes[0].text
                     fp.write(line.encode("utf8"))
-                source_text = sources[0].text.replace("'", "\\'")
+                source_text = trans_unit_id.replace("'", "\\'")
                 target_text = targets[0].text.replace("'", "\\'")
                 line = u"\"%s\" = \"%s\";\n\n" % (source_text, target_text)
                 fp.write(line.encode("utf8"))
@@ -109,6 +108,7 @@ if __name__ == "__main__":
             # export root.
             for file_node in file_nodes:
                 original = file_node.get('original')
+                original = FILENAME_OVERRIDES.get(original, original)
                 if original in FILES:
                     export_path = original_path(export_root, target_language, original)
                     print "  Writing", export_path, target_language

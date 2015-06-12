@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Send To</string>
+	<string>Send Tab</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIcons</key>
@@ -25,23 +25,23 @@
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>15</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>
 		<dict>
 			<key>NSExtensionActivationRule</key>
 			<dict>
-				<key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
-				<integer>1</integer>
 				<key>NSExtensionActivationSupportsText</key>
 				<true/>
+				<key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
+				<integer>1</integer>
 			</dict>
 		</dict>
-		<key>NSExtensionPrincipalClass</key>
-		<string>ActionViewController</string>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.ui-services</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>ActionViewController</string>
 	</dict>
 	<key>UIAppFonts</key>
 	<array>

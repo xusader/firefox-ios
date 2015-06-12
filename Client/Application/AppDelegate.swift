@@ -2,55 +2,78 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import UIKit
-import Alamofire
-import MessageUI
 import Shared
+import Storage
+import AVFoundation
 
-@UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
-    var profile: Profile!
+    var browserViewController: BrowserViewController!
+    weak var profile: BrowserProfile?
 
-    private let appVersion = NSBundle.mainBundle().objectForInfoDictionaryKey("CFBundleShortVersionString") as! String
+    let appVersion = NSBundle.mainBundle().objectForInfoDictionaryKey("CFBundleShortVersionString") as! String
 
     func application(application: UIApplication, willFinishLaunchingWithOptions launchOptions: [NSObject: AnyObject]?) -> Bool {
-        // Setup a web server that serves us static content. Do this early so that it is ready when the UI is presented.
-        setupWebServer()
-
         // Set the Firefox UA for browsing.
         setUserAgent()
 
         // Start the keyboard helper to monitor and cache keyboard state.
         KeyboardHelper.defaultHelper.startObserving()
 
-        if NSClassFromString("XCTestCase") == nil {
-            profile = BrowserProfile(localName: "profile", app: application)
-        } else {
-            // Use a clean profile for each test session.
-            profile = BrowserProfile(localName: "testProfile", app: application)
-            profile.files.removeFilesInDirectory()
-        }
+        let profile = getProfile(application)
+
+        // Set up a web server that serves us static content. Do this early so that it is ready when the UI is presented.
+        setUpWebServer(profile)
+
+        // for aural progress bar: play even with silent switch on, and do not stop audio from other apps (like music)
+        AVAudioSession.sharedInstance().setCategory(AVAudioSessionCategoryPlayback, withOptions: AVAudioSessionCategoryOptions.MixWithOthers, error: nil)
 
         self.window = UIWindow(frame: UIScreen.mainScreen().bounds)
         self.window!.backgroundColor = UIColor.whiteColor()
 
-        let controller = BrowserViewController(profile: profile)
+        let defaultRequest = NSURLRequest(URL: AppConstants.AboutHomeURL)
+        let tabManager = TabManager(defaultNewTabRequest: defaultRequest, prefs: profile.prefs)
+
+        browserViewController = BrowserViewController(profile: profile, tabManager: tabManager)
 
         // Add restoration class, the factory that will return the ViewController we 
         // will restore with.
-        controller.restorationIdentifier = NSStringFromClass(BrowserViewController.self)
-        controller.restorationClass = AppDelegate.self
+        browserViewController.restorationIdentifier = NSStringFromClass(BrowserViewController.self)
+        browserViewController.restorationClass = AppDelegate.self
 
-        self.window!.rootViewController = controller
-        self.window!.backgroundColor = UIColor(red: 0.21, green: 0.23, blue: 0.25, alpha: 1)
+        self.window!.rootViewController = browserViewController
+        self.window!.backgroundColor = AppConstants.AppBackgroundColor
 
+        NSNotificationCenter.defaultCenter().addObserverForName(FSReadingListAddReadingListItemNotification, object: nil, queue: nil) { (notification) -> Void in
+            if let userInfo = notification.userInfo, url = userInfo["URL"] as? NSURL, absoluteString = url.absoluteString {
+                let title = (userInfo["Title"] as? String) ?? ""
+                profile.readingList?.createRecordWithURL(absoluteString, title: title, addedBy: UIDevice.currentDevice().name)
+            }
+        }
 
-#if MOZ_CHANNEL_AURORA
-        checkForAuroraUpdate()
-        registerFeedbackNotification()
-#endif
+        // Force a database upgrade by requesting a non-existent password
+        profile.logins.getLoginsForProtectionSpace(NSURLProtectionSpace(host: "example.com", port: 0, `protocol`: nil, realm: nil, authenticationMethod: nil))
+
         return true
+    }
+
+    /**
+     * We maintain a weak reference to the profile so that we can pause timed
+     * syncs when we're backgrounded.
+     *
+     * The long-lasting ref to the profile lives in BrowserViewController,
+     * which we set in application:willFinishLaunchingWithOptions:.
+     *
+     * If that ever disappears, we won't be able to grab the profile to stop
+     * syncing... but in that case the profile's deinit will take care of things.
+     */
+    func getProfile(application: UIApplication) -> Profile {
+        if let profile = self.profile {
+            return profile
+        }
+        let p = BrowserProfile(localName: "profile", app: application)
+        self.profile = p
+        return p
     }
 
     func application(application: UIApplication, didFinishLaunchingWithOptions launchOptions: [NSObject : AnyObject]?) -> Bool {
@@ -58,159 +81,61 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return true
     }
 
-#if MOZ_CHANNEL_AURORA
-    var naggedAboutAuroraUpdate = false
+    // We sync in the foreground only, to avoid the possibility of runaway resource usage.
+    // Eventually we'll sync in response to notifications.
     func applicationDidBecomeActive(application: UIApplication) {
-        if !naggedAboutAuroraUpdate {
-            checkForAuroraUpdate()
-        }
+        self.profile?.syncManager.beginTimedHistorySync()
     }
 
-    func application(application: UIApplication, applicationWillTerminate app: UIApplication) {
-        unregisterFeedbackNotification()
-    }
-    
-    func applicationWillResignActive(application: UIApplication) {
-        unregisterFeedbackNotification()
+    func applicationDidEnterBackground(application: UIApplication) {
+        self.profile?.syncManager.endTimedHistorySync()
     }
 
-    private func registerFeedbackNotification() {
-        NSNotificationCenter.defaultCenter().addObserverForName(
-            UIApplicationUserDidTakeScreenshotNotification,
-            object: nil,
-            queue: NSOperationQueue.mainQueue()) { (notification) -> Void in
-                if let window = self.window {
-                    UIGraphicsBeginImageContext(window.bounds.size)
-                    window.drawViewHierarchyInRect(window.bounds, afterScreenUpdates: true)
-                    let image = UIGraphicsGetImageFromCurrentImageContext()
-                    UIGraphicsEndImageContext()
-                    self.sendFeedbackMailWithImage(image)
-                }
-        }
-    }
-    
-    private func unregisterFeedbackNotification() {
-        NSNotificationCenter.defaultCenter().removeObserver(self,
-            name: UIApplicationUserDidTakeScreenshotNotification, object: nil)
-    }
-#endif
-
-    private func setupWebServer() {
+    private func setUpWebServer(profile: Profile) {
         let server = WebServer.sharedInstance
-        ReaderModeHandlers.register(server)
+        ReaderModeHandlers.register(server, profile: profile)
+        ErrorPageHelper.register(server)
+        AboutHomeHandler.register(server)
         server.start()
     }
 
     private func setUserAgent() {
-        let webView = UIWebView()
-        let userAgent = webView.stringByEvaluatingJavaScriptFromString("navigator.userAgent")!
+        let currentiOSVersion = UIDevice.currentDevice().systemVersion
+        let lastiOSVersion = NSUserDefaults.standardUserDefaults().stringForKey("LastDeviceSystemVersionNumber")
+        var firefoxUA = NSUserDefaults.standardUserDefaults().stringForKey("UserAgent")
+        if firefoxUA == nil
+            || lastiOSVersion != currentiOSVersion {
+            let webView = UIWebView()
 
-        // Extract the WebKit version and use it as the Safari version.
-        let webKitVersionRegex = NSRegularExpression(pattern: "AppleWebKit/([^ ]+) ", options: nil, error: nil)!
-        let match = webKitVersionRegex.firstMatchInString(userAgent, options: nil, range: NSRange(location: 0, length: count(userAgent)))
-        if match == nil {
-            println("Error: Unable to determine WebKit version")
-            return
+            NSUserDefaults.standardUserDefaults().setObject(currentiOSVersion,forKey: "LastDeviceSystemVersionNumber")
+            let userAgent = webView.stringByEvaluatingJavaScriptFromString("navigator.userAgent")!
+
+            // Extract the WebKit version and use it as the Safari version.
+            let webKitVersionRegex = NSRegularExpression(pattern: "AppleWebKit/([^ ]+) ", options: nil, error: nil)!
+            let match = webKitVersionRegex.firstMatchInString(userAgent, options: nil, range: NSRange(location: 0, length: count(userAgent)))
+            if match == nil {
+                println("Error: Unable to determine WebKit version")
+                return
+            }
+            let webKitVersion = (userAgent as NSString).substringWithRange(match!.rangeAtIndex(1))
+
+            // Insert "FxiOS/<version>" before the Mobile/ section.
+            let mobileRange = (userAgent as NSString).rangeOfString("Mobile/")
+            if mobileRange.location == NSNotFound {
+                println("Error: Unable to find Mobile section")
+                return
+            }
+
+            let mutableUA = NSMutableString(string: userAgent)
+            mutableUA.insertString("FxiOS/\(appVersion) ", atIndex: mobileRange.location)
+            firefoxUA = "\(mutableUA) Safari/\(webKitVersion)"
+            NSUserDefaults.standardUserDefaults().setObject(firefoxUA, forKey: "UserAgent")
         }
-        let webKitVersion = (userAgent as NSString).substringWithRange(match!.rangeAtIndex(1))
+        NSUserDefaults.standardUserDefaults().registerDefaults(["UserAgent": firefoxUA!])
 
-        // Insert "FxiOS/<version>" before the Mobile/ section.
-        let mobileRange = (userAgent as NSString).rangeOfString("Mobile/")
-        if mobileRange.location == NSNotFound {
-            println("Error: Unable to find Mobile section")
-            return
-        }
-
-        let mutableUA = NSMutableString(string: userAgent)
-        mutableUA.insertString("FxiOS/\(appVersion) ", atIndex: mobileRange.location)
-        let firefoxUA = "\(mutableUA) Safari/\(webKitVersion)"
-        NSUserDefaults.standardUserDefaults().registerDefaults(["UserAgent": firefoxUA])
+        SDWebImageDownloader.sharedDownloader().setValue(firefoxUA, forHTTPHeaderField: "User-Agent")
     }
 }
-
-
-#if MOZ_CHANNEL_AURORA
-private let AuroraBundleIdentifier = "org.mozilla.ios.FennecAurora"
-private let AuroraPropertyListURL = "https://pvtbuilds.mozilla.org/ios/FennecAurora.plist"
-private let AuroraDownloadPageURL = "https://pvtbuilds.mozilla.org/ios/index.html"
-
-private let AppUpdateTitle = NSLocalizedString("New version available", comment: "Prompt title for application update")
-private let AppUpdateMessage = NSLocalizedString("There is a new version available of Firefox Aurora. Tap OK to go to the download page.", comment: "Prompt message for application update")
-private let AppUpdateCancel = NSLocalizedString("Not Now", comment: "Label for button to cancel application update prompt")
-private let AppUpdateOK = NSLocalizedString("OK", comment: "Label for OK button in the application update prompt")
-
-extension AppDelegate: UIAlertViewDelegate {
-    private func checkForAuroraUpdate() {
-        if isAuroraChannel() {
-            if let localVersion = localVersion() {
-                fetchLatestAuroraVersion() { version in
-                    if let remoteVersion = version {
-                        if localVersion.compare(remoteVersion as String, options: NSStringCompareOptions.NumericSearch) == NSComparisonResult.OrderedAscending {
-                            self.naggedAboutAuroraUpdate = true
-
-                            let alert = UIAlertView(title: AppUpdateTitle, message: AppUpdateMessage, delegate: self, cancelButtonTitle: AppUpdateCancel, otherButtonTitles: AppUpdateOK)
-                            alert.show()
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func isAuroraChannel() -> Bool {
-        return NSBundle.mainBundle().bundleIdentifier == AuroraBundleIdentifier
-    }
-
-    private func localVersion() -> NSString? {
-        return NSBundle.mainBundle().objectForInfoDictionaryKey(String(kCFBundleVersionKey)) as? NSString
-    }
-
-    private func fetchLatestAuroraVersion(completionHandler: NSString? -> Void) {
-        Alamofire.request(.GET, AuroraPropertyListURL).responsePropertyList(options: NSPropertyListReadOptions.allZeros, completionHandler: { (_, _, object, _) -> Void in
-            if let plist = object as? NSDictionary {
-                if let items = plist["items"] as? NSArray {
-                    if let item = items[0] as? NSDictionary {
-                        if let metadata = item["metadata"] as? NSDictionary {
-                            if let remoteVersion = metadata["bundle-version"] as? String {
-                                completionHandler(remoteVersion)
-                                return
-                            }
-                        }
-                    }
-                }
-            }
-            completionHandler(nil)
-        })
-    }
-
-    func alertView(alertView: UIAlertView, clickedButtonAtIndex buttonIndex: Int) {
-        if buttonIndex == 1 {
-            UIApplication.sharedApplication().openURL(NSURL(string: AuroraDownloadPageURL)!)
-        }
-    }
-}
-    
-extension AppDelegate: MFMailComposeViewControllerDelegate {
-    func sendFeedbackMailWithImage(image: UIImage) {
-        if (MFMailComposeViewController.canSendMail()) {
-            if let buildNumber = NSBundle.mainBundle().objectForInfoDictionaryKey(String(kCFBundleVersionKey)) as? NSString {
-                let mailComposeViewController = MFMailComposeViewController()
-                mailComposeViewController.mailComposeDelegate = self
-                mailComposeViewController.setSubject("Feedback on iOS client version v\(appVersion) (\(buildNumber))")
-                mailComposeViewController.setToRecipients(["ios-feedback@mozilla.com"])
-                
-                let imageData = UIImagePNGRepresentation(image)
-                mailComposeViewController.addAttachmentData(imageData, mimeType: "image/png", fileName: "feedback.png")
-                window?.rootViewController?.presentViewController(mailComposeViewController, animated: true, completion: nil)
-            }
-        }
-    }
-    
-    func mailComposeController(mailComposeViewController: MFMailComposeViewController!, didFinishWithResult result: MFMailComposeResult, error: NSError!) {
-        mailComposeViewController.dismissViewControllerAnimated(true, completion: nil)
-    }
-}
-#endif
 
 extension AppDelegate: UIApplicationDelegate {
     func application(application: UIApplication, shouldSaveApplicationState coder: NSCoder) -> Bool {

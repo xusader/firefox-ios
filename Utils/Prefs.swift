@@ -10,6 +10,7 @@ public protocol Prefs {
     func setLong(value: Int64, forKey defaultName: String)
     func setInt(value: Int32, forKey defaultName: String)
     func setString(value: String, forKey defaultName: String)
+    func setBool(value: Bool, forKey defaultName: String)
     func setObject(value: AnyObject?, forKey defaultName: String)
     func stringForKey(defaultName: String) -> String?
     func boolForKey(defaultName: String) -> Bool?
@@ -26,7 +27,8 @@ public protocol Prefs {
 public class MockProfilePrefs : Prefs {
     let prefix: String
 
-    var things: NSMutableDictionary = NSMutableDictionary()
+    // Public for testing.
+    public var things: NSMutableDictionary = NSMutableDictionary()
 
     public init(things: NSMutableDictionary, prefix: String) {
         self.things = things
@@ -46,11 +48,11 @@ public class MockProfilePrefs : Prefs {
     }
 
     public func setLong(value: UInt64, forKey defaultName: String) {
-        setObject(NSNumber(unsignedLongLong: value), forKey: name(defaultName))
+        setObject(NSNumber(unsignedLongLong: value), forKey: defaultName)
     }
 
     public func setLong(value: Int64, forKey defaultName: String) {
-        setObject(NSNumber(longLong: value), forKey: name(defaultName))
+        setObject(NSNumber(longLong: value), forKey: defaultName)
     }
 
     public func setInt(value: Int32, forKey defaultName: String) {
@@ -58,6 +60,10 @@ public class MockProfilePrefs : Prefs {
     }
 
     public func setString(value: String, forKey defaultName: String) {
+        things[name(defaultName)] = value
+    }
+
+    public func setBool(value: Bool, forKey defaultName: String) {
         things[name(defaultName)] = value
     }
 

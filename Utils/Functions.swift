@@ -78,6 +78,25 @@ public func optArrayEqual<T: Equatable>(lhs: [T]?, rhs: [T]?) -> Bool {
     }
 }
 
+/**
+ * Given an array, return an array of slices of size `by` (possibly excepting the last slice).
+ *
+ * If `by` is longer than the input, returns a single chunk.
+ * If `by` is less than 1, acts as if `by` is 1.
+ * If the length of the array isn't a multiple of `by`, the final slice will
+ * be smaller than `by`, but never empty.
+ *
+ * If the input array is empty, returns an empty array.
+ */
+public func chunk<T>(arr: [T], #by: Int) -> [ArraySlice<T>] {
+    let count = arr.count
+    let step = max(1, by)     // Handle out-of-range 'by'.
+    let s = stride(from: 0, to: count, by: step)
+    return map(s) {
+        arr[$0..<advance($0, step, count)]
+    }
+}
+
 public func optDictionaryEqual<K: Equatable, V: Equatable>(lhs: [K: V]?, rhs: [K: V]?) -> Bool {
     switch (lhs, rhs) {
     case (.None, .None):
@@ -126,10 +145,19 @@ public func mapValues<K, T, U>(source: [K: T], f: (T -> U)) -> [K: U] {
  * Find the first matching item in the array and return it.
  * Unlike map/filter approaches, this is lazy.
  */
-public func find<T>(arr: [T], f: (T) -> Bool) -> T? {
-    for (x) in arr {
+public func find<T>(arr: [T], f: T -> Bool) -> T? {
+    for x in arr {
         if f(x) {
             return x
+        }
+    }
+    return nil
+}
+
+public func findOneValue<K, V>(map: [K: V], f: V -> Bool) -> V? {
+    for v in map.values {
+        if f(v) {
+            return v
         }
     }
     return nil

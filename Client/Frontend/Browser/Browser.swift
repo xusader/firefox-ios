@@ -5,6 +5,7 @@
 import Foundation
 import WebKit
 import Storage
+import Shared
 
 protocol BrowserHelper {
     static func name() -> String
@@ -12,46 +13,115 @@ protocol BrowserHelper {
     func userContentController(userContentController: WKUserContentController, didReceiveScriptMessage message: WKScriptMessage)
 }
 
+@objc
 protocol BrowserDelegate {
     func browser(browser: Browser, didAddSnackbar bar: SnackBar)
     func browser(browser: Browser, didRemoveSnackbar bar: SnackBar)
+    optional func browser(browser: Browser, didCreateWebView webView: WKWebView)
+    optional func browser(browser: Browser, willDeleteWebView webView: WKWebView)
 }
 
-class Browser: NSObject, WKScriptMessageHandler {
-    let webView: WKWebView
+class Browser: NSObject {
+    var webView: WKWebView? = nil
     var browserDelegate: BrowserDelegate? = nil
     var bars = [SnackBar]()
     var favicons = [Favicon]()
+
     var screenshot: UIImage?
+    private var helperManager: HelperManager? = nil
+    var lastRequest: NSURLRequest? = nil
+    private var configuration: WKWebViewConfiguration? = nil
 
     init(configuration: WKWebViewConfiguration) {
-        configuration.userContentController = WKUserContentController()
-        webView = WKWebView(frame: CGRectZero, configuration: configuration)
-        webView.allowsBackForwardNavigationGestures = true
-        webView.accessibilityLabel = NSLocalizedString("Web content", comment: "Accessibility label for the main web content view")
-        webView.backgroundColor = UIColor.lightGrayColor()
+        self.configuration = configuration
+    }
 
-        super.init()
+    class func toTab(browser: Browser) -> RemoteTab? {
+        if let displayURL = browser.displayURL {
+            return RemoteTab(clientGUID: nil,
+                URL: displayURL,
+                title: browser.displayTitle,
+                history: browser.historyList,
+                lastUsed: Timestamp(),
+                icon: nil)
+        } else {
+            return nil
+        }
+    }
+
+    weak var navigationDelegate: WKNavigationDelegate? {
+        didSet {
+            if let webView = webView {
+                webView.navigationDelegate = navigationDelegate
+            }
+        }
+    }
+
+    func createWebview() {
+        if webView == nil {
+            assert(configuration != nil, "Create webview can only be called once")
+            configuration!.userContentController = WKUserContentController()
+            configuration!.preferences = WKPreferences()
+            configuration!.preferences.javaScriptCanOpenWindowsAutomatically = false
+            let webView = WKWebView(frame: CGRectZero, configuration: configuration!)
+            configuration = nil
+
+            webView.accessibilityLabel = NSLocalizedString("Web content", comment: "Accessibility label for the main web content view")
+            webView.allowsBackForwardNavigationGestures = true
+            webView.backgroundColor = UIColor.lightGrayColor()
+            webView.scrollView.layer.masksToBounds = false
+
+            // Turning off masking allows the web content to flow outside of the scrollView's frame
+            // which allows the content appear beneath the toolbars in the BrowserViewController
+            webView.scrollView.decelerationRate = UIScrollViewDecelerationRateNormal
+            webView.scrollView.layer.masksToBounds = false
+            webView.navigationDelegate = navigationDelegate
+            helperManager = HelperManager(webView: webView)
+
+            if let request = lastRequest {
+                webView.loadRequest(request)
+            }
+
+            self.webView = webView
+            browserDelegate?.browser?(self, didCreateWebView: webView)
+        }
+    }
+
+    deinit {
+        if let webView = webView {
+            browserDelegate?.browser?(self, willDeleteWebView: webView)
+        }
     }
 
     var loading: Bool {
-        return webView.loading
+        return webView?.loading ?? false
+    }
+
+    var estimatedProgress: Double {
+        return webView?.estimatedProgress ?? 0
     }
 
     var backList: [WKBackForwardListItem]? {
-        return webView.backForwardList.backList as? [WKBackForwardListItem]
+        return webView?.backForwardList.backList as? [WKBackForwardListItem]
     }
 
     var forwardList: [WKBackForwardListItem]? {
-        return webView.backForwardList.forwardList as? [WKBackForwardListItem]
+        return webView?.backForwardList.forwardList as? [WKBackForwardListItem]
+    }
+
+    var historyList: [NSURL] {
+        func listToUrl(item: WKBackForwardListItem) -> NSURL { return item.URL }
+        var tabs = self.backList?.map(listToUrl) ?? [NSURL]()
+        tabs.append(self.url!)
+        return tabs
     }
 
     var title: String? {
-        return webView.title
+        return webView?.title
     }
 
     var displayTitle: String {
-        if let title = webView.title {
+        if let title = webView?.title {
             if !title.isEmpty {
                 return title
             }
@@ -72,98 +142,89 @@ class Browser: NSObject, WKScriptMessageHandler {
     }
 
     var url: NSURL? {
-        return webView.URL
+        return webView?.URL ?? lastRequest?.URL
     }
 
     var displayURL: NSURL? {
-        if let url = webView.URL {
-            return ReaderModeUtils.isReaderModeURL(url) ? ReaderModeUtils.decodeURL(url) : url
+        if let url = webView?.URL ?? lastRequest?.URL {
+            if !AboutUtils.isAboutHomeURL(url) {
+                if ReaderModeUtils.isReaderModeURL(url) {
+                    return ReaderModeUtils.decodeURL(url)
+                }
+
+                if ErrorPageHelper.isErrorPageURL(url) {
+                    return ErrorPageHelper.decodeURL(url)
+                }
+
+                return url
+            }
         }
         return nil
     }
 
     var canGoBack: Bool {
-        return webView.canGoBack
+        return webView?.canGoBack ?? false
     }
 
     var canGoForward: Bool {
-        return webView.canGoForward
+        return webView?.canGoForward ?? false
     }
 
     func goBack() {
-        webView.goBack()
+        webView?.goBack()
     }
 
     func goForward() {
-        webView.goForward()
+        webView?.goForward()
     }
 
     func goToBackForwardListItem(item: WKBackForwardListItem) {
-        webView.goToBackForwardListItem(item)
+        webView?.goToBackForwardListItem(item)
     }
 
-    func loadRequest(request: NSURLRequest) {
-        webView.loadRequest(request)
+    func loadRequest(request: NSURLRequest) -> WKNavigation? {
+        lastRequest = request
+        if let webView = webView {
+            return webView.loadRequest(request)
+        }
+        return nil
     }
 
     func stop() {
-        webView.stopLoading()
+        webView?.stopLoading()
     }
 
     func reload() {
-        webView.reload()
-    }
-
-    private var helpers: [String: BrowserHelper] = [String: BrowserHelper]()
-
-    func userContentController(userContentController: WKUserContentController, didReceiveScriptMessage message: WKScriptMessage) {
-        for helper in helpers.values {
-            if let scriptMessageHandlerName = helper.scriptMessageHandlerName() {
-                if scriptMessageHandlerName == message.name {
-                    helper.userContentController(userContentController, didReceiveScriptMessage: message)
-                    return
-                }
-            }
-        }
+        webView?.reload()
     }
 
     func addHelper(helper: BrowserHelper, name: String) {
-        if let existingHelper = helpers[name] {
-            assertionFailure("Duplicate helper added: \(name)")
-        }
-
-        helpers[name] = helper
-
-        // If this helper handles script messages, then get the handler name and register it. The Browser
-        // receives all messages and then dispatches them to the right BrowserHelper.
-        if let scriptMessageHandlerName = helper.scriptMessageHandlerName() {
-            webView.configuration.userContentController.addScriptMessageHandler(self, name: scriptMessageHandlerName)
-        }
+        helperManager!.addHelper(helper, name: name)
     }
 
     func getHelper(#name: String) -> BrowserHelper? {
-        return helpers[name]
+        return helperManager!.getHelper(name: name)
     }
 
     func hideContent(animated: Bool = false) {
-        webView.userInteractionEnabled = false
+        webView?.userInteractionEnabled = false
         if animated {
             UIView.animateWithDuration(0.25, animations: { () -> Void in
-                self.webView.alpha = 0.0
+                self.webView?.alpha = 0.0
             })
         } else {
-            webView.alpha = 0.0
+            webView?.alpha = 0.0
         }
     }
 
     func showContent(animated: Bool = false) {
-        webView.userInteractionEnabled = true
+        webView?.userInteractionEnabled = true
         if animated {
             UIView.animateWithDuration(0.25, animations: { () -> Void in
-                self.webView.alpha = 1.0
+                self.webView?.alpha = 1.0
             })
         } else {
-            webView.alpha = 1.0
+            webView?.alpha = 1.0
         }
     }
 
@@ -195,6 +256,44 @@ class Browser: NSObject, WKScriptMessageHandler {
                 removeSnackbar(bar)
             }
         }
+    }
+}
+
+private class HelperManager: NSObject, WKScriptMessageHandler {
+    private var helpers = [String: BrowserHelper]()
+    private weak var webView: WKWebView?
+
+    init(webView: WKWebView) {
+        self.webView = webView
+    }
+
+    @objc func userContentController(userContentController: WKUserContentController, didReceiveScriptMessage message: WKScriptMessage) {
+        for helper in helpers.values {
+            if let scriptMessageHandlerName = helper.scriptMessageHandlerName() {
+                if scriptMessageHandlerName == message.name {
+                    helper.userContentController(userContentController, didReceiveScriptMessage: message)
+                    return
+                }
+            }
+        }
+    }
+
+    func addHelper(helper: BrowserHelper, name: String) {
+        if let existingHelper = helpers[name] {
+            assertionFailure("Duplicate helper added: \(name)")
+        }
+
+        helpers[name] = helper
+
+        // If this helper handles script messages, then get the handler name and register it. The Browser
+        // receives all messages and then dispatches them to the right BrowserHelper.
+        if let scriptMessageHandlerName = helper.scriptMessageHandlerName() {
+            webView?.configuration.userContentController.addScriptMessageHandler(self, name: scriptMessageHandlerName)
+        }
+    }
+
+    func getHelper(#name: String) -> BrowserHelper? {
+        return helpers[name]
     }
 }
 

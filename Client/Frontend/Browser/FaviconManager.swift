@@ -17,7 +17,7 @@ class FaviconManager : BrowserHelper {
         if let path = NSBundle.mainBundle().pathForResource("Favicons", ofType: "js") {
             if let source = NSString(contentsOfFile: path, encoding: NSUTF8StringEncoding, error: nil) as? String {
                 var userScript = WKUserScript(source: source, injectionTime: WKUserScriptInjectionTime.AtDocumentEnd, forMainFrameOnly: true)
-                browser.webView.configuration.userContentController.addUserScript(userScript)
+                browser.webView!.configuration.userContentController.addUserScript(userScript)
             }
         }
     }
@@ -31,11 +31,9 @@ class FaviconManager : BrowserHelper {
     }
 
     func userContentController(userContentController: WKUserContentController, didReceiveScriptMessage message: WKScriptMessage) {
-        println("DEBUG: faviconsMessageHandler message: \(message.body)")
-
         let manager = SDWebImageManager.sharedManager()
         self.browser?.favicons.removeAll(keepCapacity: false)
-        if let url = browser?.webView.URL?.absoluteString {
+        if let url = browser?.webView!.URL?.absoluteString {
             let site = Site(url: url, title: "")
             if let icons = message.body as? [String: Int] {
                 for icon in icons {
@@ -52,7 +50,7 @@ class FaviconManager : BrowserHelper {
                                 return
                             }
                             self.browser?.favicons.append(fav)
-                            self.profile.favicons.add(fav, site: site, complete: nil)
+                            self.profile.favicons.addFavicon(fav, forSite: site)
                         })
                     }
                 }

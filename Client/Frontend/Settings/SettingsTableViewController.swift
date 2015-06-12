@@ -7,6 +7,9 @@ import Base32
 import Shared
 import UIKit
 
+private var ShowDebugSettings: Bool = false
+private var DebugSettingsClickCount: Int = 0
+
 // A base TableViewCell, to help minimize initialization and allow recycling.
 class SettingsTableViewCell: UITableViewCell {
     override init(style: UITableViewCellStyle, reuseIdentifier: String?) {
@@ -36,6 +39,13 @@ class Setting {
     var hidden: Bool { return false }
 
     var accessoryType: UITableViewCellAccessoryType { return .None }
+
+    // Called when the cell is setup. Call if you need the default behaviour.
+    func onConfigureCell(cell: UITableViewCell) {
+        cell.detailTextLabel?.attributedText = status
+        cell.textLabel?.attributedText = title
+        cell.accessoryType = accessoryType
+    }
 
     // Called when the pref is tapped.
     func onClick(navigationController: UINavigationController?) { return }
@@ -106,7 +116,11 @@ private class AccountSetting: Setting, FxAContentViewControllerDelegate {
         let account = FirefoxAccount.fromConfigurationAndJSON(profile.accountConfiguration, data: data)!
         settings.profile.setAccount(account)
 
+        // Reload the data to reflect the new Account immediately.
         settings.tableView.reloadData()
+        // And start advancing the Account state in the background as well.
+        settings.SELrefresh()
+
         settings.navigationController?.popToRootViewControllerAnimated(true)
     }
 
@@ -129,7 +143,7 @@ private class ConnectSetting: WithoutAccountSetting {
     override var accessoryType: UITableViewCellAccessoryType { return .DisclosureIndicator }
 
     override var title: NSAttributedString? {
-        return NSAttributedString(string: NSLocalizedString("Sign in", comment: "Text message / button in the settings table view"))
+        return NSAttributedString(string: NSLocalizedString("Sign in", comment: "Text message / button in the settings table view"), attributes: [NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor])
     }
 
     override func onClick(navigationController: UINavigationController?) {
@@ -145,7 +159,7 @@ private class DisconnectSetting: WithAccountSetting {
     override var accessoryType: UITableViewCellAccessoryType { return .None }
 
     override var title: NSAttributedString? {
-        return NSAttributedString(string: NSLocalizedString("Disconnect", comment: "Button in settings screen to disconnect from your account"))
+        return NSAttributedString(string: NSLocalizedString("Disconnect", comment: "Button in settings screen to disconnect from your account"), attributes: [NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor])
     }
 
     override func onClick(navigationController: UINavigationController?) {
@@ -159,8 +173,9 @@ private class DisconnectSetting: WithAccountSetting {
             })
         alertController.addAction(
             UIAlertAction(title: NSLocalizedString("Disconnect", comment: "Disconnect button in the 'disconnect firefox account' alert"), style: .Destructive) { (action) in
-                self.settings.profile.setAccount(nil)
-                self.settings.tableView.reloadData()
+                self.settings.profile.removeAccount()
+                // Refresh, to show that we no longer have an Account immediately.
+                self.settings.SELrefresh()
             })
         navigationController?.presentViewController(alertController, animated: true, completion: nil)
     }
@@ -168,11 +183,26 @@ private class DisconnectSetting: WithAccountSetting {
 
 // Sync setting that shows the current Firefox Account status.
 private class AccountStatusSetting: WithAccountSetting {
-    override var accessoryType: UITableViewCellAccessoryType { return .DisclosureIndicator }
+    override var accessoryType: UITableViewCellAccessoryType {
+        if let account = profile.getAccount() {
+            switch account.actionNeeded {
+            case .NeedsVerification:
+                // We link to the resend verification email page.
+                return .DisclosureIndicator
+            case .NeedsPassword:
+                 // We link to the re-enter password page.
+                return .DisclosureIndicator
+            case .None, .NeedsUpgrade:
+                // In future, we'll want to link to /settings and an upgrade page, respectively.
+                return .None
+            }
+        }
+        return .DisclosureIndicator
+    }
 
     override var title: NSAttributedString? {
         if let account = profile.getAccount() {
-            return NSAttributedString(string: account.email)
+            return NSAttributedString(string: account.email, attributes: [NSFontAttributeName: AppConstants.DefaultStandardFontBold, NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor])
         }
         return nil
     }
@@ -183,7 +213,7 @@ private class AccountStatusSetting: WithAccountSetting {
             case .None:
                 return nil
             case .NeedsVerification:
-                return NSAttributedString(string: NSLocalizedString("Verify your email address.", comment: "Text message in the settings table view"))
+                return NSAttributedString(string: NSLocalizedString("Verify your email address.", comment: "Text message in the settings table view"), attributes: [NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor])
             case .NeedsPassword:
                 let string = NSLocalizedString("Enter your password to connect.", comment: "Text message in the settings table view")
                 let range = NSRange(location: 0, length: count(string))
@@ -212,7 +242,7 @@ private class AccountStatusSetting: WithAccountSetting {
 
         if let account = profile.getAccount() {
             switch account.actionNeeded {
-            case .None, .NeedsVerification:
+            case .NeedsVerification:
                 let cs = NSURLComponents(URL: account.configuration.settingsURL, resolvingAgainstBaseURL: false)
                 cs?.queryItems?.append(NSURLQueryItem(name: "email", value: account.email))
                 viewController.url = cs?.URL
@@ -220,8 +250,8 @@ private class AccountStatusSetting: WithAccountSetting {
                 let cs = NSURLComponents(URL: account.configuration.forceAuthURL, resolvingAgainstBaseURL: false)
                 cs?.queryItems?.append(NSURLQueryItem(name: "email", value: account.email))
                 viewController.url = cs?.URL
-            case .NeedsUpgrade:
-                // In future, we'll want to link to an upgrade page.
+            case .None, .NeedsUpgrade:
+                // In future, we'll want to link to /settings and an upgrade page, respectively.
                 return
             }
         }
@@ -230,12 +260,139 @@ private class AccountStatusSetting: WithAccountSetting {
     }
 }
 
+// For great debugging!
+private class RequirePasswordDebugSetting: WithAccountSetting {
+    override var hidden: Bool {
+        if !ShowDebugSettings {
+            return true
+        }
+        if let account = profile.getAccount() where account.actionNeeded != FxAActionNeeded.NeedsPassword {
+            return false
+        }
+        return true
+    }
+
+    override var title: NSAttributedString? {
+        return NSAttributedString(string: NSLocalizedString("Debug: require password", comment: "Debug option"), attributes: [NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor])
+    }
+
+    override func onClick(navigationController: UINavigationController?) {
+        profile.getAccount()?.makeSeparated()
+        settings.tableView.reloadData()
+    }
+}
+
+
+// For great debugging!
+private class RequireUpgradeDebugSetting: WithAccountSetting {
+    override var hidden: Bool {
+        if !ShowDebugSettings {
+            return true
+        }
+        if let account = profile.getAccount() where account.actionNeeded != FxAActionNeeded.NeedsUpgrade {
+            return false
+        }
+        return true
+    }
+
+    override var title: NSAttributedString? {
+        return NSAttributedString(string: NSLocalizedString("Debug: require upgrade", comment: "Debug option"), attributes: [NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor])
+    }
+
+    override func onClick(navigationController: UINavigationController?) {
+        profile.getAccount()?.makeDoghouse()
+        settings.tableView.reloadData()
+    }
+}
+
+// For great debugging!
+private class ForgetSyncAuthStateDebugSetting: WithAccountSetting {
+    override var hidden: Bool {
+        if !ShowDebugSettings {
+            return true
+        }
+        if let account = profile.getAccount() {
+            return false
+        }
+        return true
+    }
+
+    override var title: NSAttributedString? {
+        return NSAttributedString(string: NSLocalizedString("Debug: forget Sync auth state", comment: "Debug option"), attributes: [NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor])
+    }
+
+    override func onClick(navigationController: UINavigationController?) {
+        profile.getAccount()?.syncAuthState.invalidate()
+        settings.tableView.reloadData()
+    }
+}
+
 // Show the current version of Firefox
 private class VersionSetting : Setting {
+    let settings: SettingsTableViewController
+
+    init(settings: SettingsTableViewController) {
+        self.settings = settings
+        super.init(title: nil)
+    }
+
     override var title: NSAttributedString? {
         let appVersion = NSBundle.mainBundle().objectForInfoDictionaryKey("CFBundleShortVersionString") as! String
         let buildNumber = NSBundle.mainBundle().objectForInfoDictionaryKey("CFBundleVersion") as! String
-        return NSAttributedString(string: String(format: NSLocalizedString("Version %@ (%@)", comment: "Version number of Firefox shown in settings"), appVersion, buildNumber))
+        return NSAttributedString(string: String(format: NSLocalizedString("Version %@ (%@)", comment: "Version number of Firefox shown in settings"), appVersion, buildNumber), attributes: [NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor])
+    }
+
+    override func onClick(navigationController: UINavigationController?) {
+        if AppConstants.BuildChannel != .Aurora {
+            DebugSettingsClickCount += 1
+            if DebugSettingsClickCount >= 5 {
+                DebugSettingsClickCount = 0
+                ShowDebugSettings = !ShowDebugSettings
+                settings.tableView.reloadData()
+            }
+        }
+    }
+}
+
+// Opens the on-boarding screen again
+private class ShowIntroductionSetting: Setting {
+    let profile: Profile
+
+    init(settings: SettingsTableViewController) {
+        self.profile = settings.profile
+        super.init(title: NSAttributedString(string: NSLocalizedString("Show introduction again", comment: "Show the on-boarding screen again from the settings"), attributes: [NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor]))
+    }
+
+    override func onClick(navigationController: UINavigationController?) {
+        navigationController?.dismissViewControllerAnimated(true, completion: {
+            if let appDelegate = UIApplication.sharedApplication().delegate as? AppDelegate {
+                appDelegate.browserViewController.dismissTabTrayController(animated: true) {
+                    appDelegate.browserViewController.presentIntroViewController(force: true)
+                }
+            }
+        })
+    }
+}
+
+class UseCompactTabLayoutSetting: Setting {
+    let profile: Profile
+
+    init(settings: SettingsTableViewController) {
+        self.profile = settings.profile
+        super.init(title: NSAttributedString(string: NSLocalizedString("Use Compact Tabs", comment: "Setting to enable compact tabs in the tab overview"), attributes: [NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor]))
+    }
+
+    override func onConfigureCell(cell: UITableViewCell) {
+        super.onConfigureCell(cell)
+        let control = UISwitch()
+        control.onTintColor = AppConstants.ControlTintColor
+        control.addTarget(self, action: "switchValueChanged:", forControlEvents: UIControlEvents.ValueChanged)
+        control.on = profile.prefs.boolForKey("CompactTabLayout") ?? true
+        cell.accessoryView = control
+    }
+
+    @objc func switchValueChanged(control: UISwitch) {
+        profile.prefs.setBool(control.on, forKey: "CompactTabLayout")
     }
 }
 
@@ -247,7 +404,7 @@ private class SearchSetting: Setting {
 
     init(settings: SettingsTableViewController) {
         self.profile = settings.profile
-        super.init(title: NSAttributedString(string: NSLocalizedString("Search", comment: "Open search section of settings")))
+        super.init(title: NSAttributedString(string: NSLocalizedString("Search", comment: "Open search section of settings"), attributes: [NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor]))
     }
 
     override func onClick(navigationController: UINavigationController?) {
@@ -265,33 +422,61 @@ private class ClearPrivateDataSetting: Setting {
         self.profile = settings.profile
         self.tabManager = settings.tabManager
 
-        let clearTitle = NSLocalizedString("Clear private data", comment: "Clear private data setting")
-        super.init(title: NSAttributedString(string: clearTitle))
+        let clearTitle = NSLocalizedString("Clear private data", comment: "Label used as an item in Settings. When touched it will open a dialog prompting the user to make sure they want to clear all of their private data.")
+        super.init(title: NSAttributedString(string: clearTitle, attributes: [NSForegroundColorAttributeName: AppConstants.TableViewRowTextColor]))
     }
 
     override func onClick(navigationController: UINavigationController?) {
         let clearable = EverythingClearable(profile: profile, tabmanager: tabManager)
 
-        var title: String { return NSLocalizedString("Clear Everything", tableName: "ClearPrivateData", comment: "Clear everything title") }
-        var message: String { return NSLocalizedString("Are you sure you want all of your data? This will also close all open tabs.", tableName: "ClearPrivateData", comment: "Message shown in the dialog when clearing everything") }
+        var title: String { return NSLocalizedString("Clear Everything", tableName: "ClearPrivateData", comment: "Title of the Clear private data dialog.") }
+        var message: String { return NSLocalizedString("Are you sure you want to clear all of your data? \n This will also close all open tabs.", tableName: "ClearPrivateData", comment: "Message shown in the dialog prompting users if they want to clear everything") }
 
         let alert = UIAlertController(title: title, message: message, preferredStyle: UIAlertControllerStyle.ActionSheet)
 
-        let clearString = NSLocalizedString("Clear", tableName: "ClearPrivateData", comment: "Clicking this button will cause us to clear your private data")
+        let clearString = NSLocalizedString("Clear", tableName: "ClearPrivateData", comment: "Used as a button label in the dialog to Clear private data dialog")
         alert.addAction(UIAlertAction(title: clearString, style: UIAlertActionStyle.Destructive, handler: { (action) -> Void in
             clearable.clear()
         }))
 
-        let cancelString = NSLocalizedString("Cancel", tableName: "ClearPrivateData", comment: "Cancel string in the clear private data dialog")
+        let cancelString = NSLocalizedString("Cancel", tableName: "ClearPrivateData", comment: "Used as a button label in the dialog to cancel clear private data dialog")
         alert.addAction(UIAlertAction(title: cancelString, style: UIAlertActionStyle.Cancel, handler: { (action) -> Void in }))
         navigationController?.presentViewController(alert, animated: true) { () -> Void in }
+    }
+}
+
+private class PopupBlockingSettings: Setting {
+    let prefs: Prefs
+    let tabManager: TabManager!
+
+    let prefKey = "blockPopups"
+
+    init(settings: SettingsTableViewController) {
+        self.prefs = settings.profile.prefs
+        self.tabManager = settings.tabManager
+        let title = NSLocalizedString("Block pop-up windows", comment: "Block pop-up windows setting")
+        super.init(title: NSAttributedString(string: title))
+    }
+
+    override func onConfigureCell(cell: UITableViewCell) {
+        super.onConfigureCell(cell)
+        let control = UISwitch()
+        control.onTintColor = AppConstants.ControlTintColor
+        control.addTarget(self, action: "switchValueChanged:", forControlEvents: UIControlEvents.ValueChanged)
+        control.on = prefs.boolForKey(prefKey) ?? true
+        cell.accessoryView = control
+    }
+
+    @objc func switchValueChanged(toggle: UISwitch) {
+        prefs.setObject(toggle.on, forKey: prefKey)
     }
 }
 
 // The base settings view controller.
 class SettingsTableViewController: UITableViewController {
     private let Identifier = "CellIdentifier"
-    private var settings: [SettingSection]!
+    private let SectionHeaderIdentifier = "SectionHeaderIdentifier"
+    private var settings = [SettingSection]()
 
     var profile: Profile!
     var tabManager: TabManager!
@@ -300,14 +485,28 @@ class SettingsTableViewController: UITableViewController {
         super.viewDidLoad()
 
         let privacyTitle = NSLocalizedString("Privacy", comment: "Privacy section title")
+        let accountDebugSettings: [Setting]
+        if AppConstants.BuildChannel != .Aurora {
+            accountDebugSettings = [
+                // Debug settings:
+                RequirePasswordDebugSetting(settings: self),
+                RequireUpgradeDebugSetting(settings: self),
+                ForgetSyncAuthStateDebugSetting(settings: self),
+            ]
+        } else {
+            accountDebugSettings = []
+        }
 
-        settings = [
+        settings += [
             SettingSection(title: nil, children: [
                 // Without a Firefox Account:
                 ConnectSetting(settings: self),
                 // With a Firefox Account:
                 AccountStatusSetting(settings: self),
                 DisconnectSetting(settings: self),
+            ] + accountDebugSettings),
+            SettingSection(title: NSAttributedString(string: NSLocalizedString("General", comment: "General settings section title")), children: [
+                PopupBlockingSettings(settings: self),
             ]),
             SettingSection(title: NSAttributedString(string: privacyTitle), children: [
                 ClearPrivateDataSetting(settings: self)
@@ -315,9 +514,26 @@ class SettingsTableViewController: UITableViewController {
             SettingSection(title: NSAttributedString(string: NSLocalizedString("Search Settings", comment: "Search settings section title")), children: [
                 SearchSetting(settings: self)
             ]),
+            SettingSection(title: NSAttributedString(string: NSLocalizedString("Support", comment: "Support section title")), children: [
+                ShowIntroductionSetting(settings: self)
+            ])
+        ]
+
+        // There is nothing to show in the Customize section if we don't include the compact tab layout
+        // setting on iPad. When more options are added that work on both device types, this logic can
+        // be changed.
+        if UIDevice.currentDevice().userInterfaceIdiom == .Phone {
+            settings += [
+                SettingSection(title: NSAttributedString(string: NSLocalizedString("Customize", comment: "Customize section title in settings")), children: [
+                    UseCompactTabLayoutSetting(settings: self)
+                ])
+            ]
+        }
+
+        settings += [
             SettingSection(title: NSAttributedString(string: NSLocalizedString("About", comment: "About settings section title")), children: [
-                VersionSetting()
-            ]),
+                VersionSetting(settings: self)
+            ])
         ]
 
         navigationItem.title = NSLocalizedString("Settings", comment: "Settings")
@@ -326,6 +542,40 @@ class SettingsTableViewController: UITableViewController {
             style: UIBarButtonItemStyle.Done,
             target: navigationController, action: "SELdone")
         tableView.registerClass(SettingsTableViewCell.self, forCellReuseIdentifier: Identifier)
+        tableView.registerClass(SettingsTableSectionHeaderView.self, forHeaderFooterViewReuseIdentifier: SectionHeaderIdentifier)
+        tableView.tableFooterView = UIView()
+    }
+
+    override func viewDidAppear(animated: Bool) {
+        super.viewDidAppear(animated)
+        SELrefresh()
+    }
+
+    @objc private func SELrefresh() {
+        // Through-out, be aware that modifying the control while a refresh is in progress is /not/ supported and will likely crash the app.
+        if let account = self.profile.getAccount() {
+            // Add the refresh control right away.
+            if refreshControl == nil {
+                refreshControl = UIRefreshControl()
+                refreshControl?.addTarget(self, action: "SELrefresh", forControlEvents: UIControlEvents.ValueChanged)
+            }
+
+            refreshControl?.beginRefreshing()
+            account.advance().upon { _ in
+                dispatch_async(dispatch_get_main_queue()) { () -> Void in
+                    self.tableView.reloadData()
+                    self.refreshControl?.endRefreshing()
+                }
+            }
+        } else {
+            // Remove the refresh control immediately after ending the refresh.
+            refreshControl?.endRefreshing()
+            if let refreshControl = self.refreshControl {
+                refreshControl.removeFromSuperview()
+            }
+            refreshControl = nil
+            self.tableView.reloadData()
+        }
     }
 
     override func tableView(tableView: UITableView, cellForRowAtIndexPath indexPath: NSIndexPath) -> UITableViewCell {
@@ -340,9 +590,7 @@ class SettingsTableViewController: UITableViewController {
             } else {
                 cell = tableView.dequeueReusableCellWithIdentifier(Identifier, forIndexPath: indexPath) as! UITableViewCell
             }
-            cell.detailTextLabel?.attributedText = setting.status
-            cell.textLabel?.attributedText = setting.title
-            cell.accessoryType = setting.accessoryType
+            setting.onConfigureCell(cell)
             return cell
         }
         return tableView.dequeueReusableCellWithIdentifier(Identifier, forIndexPath: indexPath) as! UITableViewCell
@@ -357,9 +605,26 @@ class SettingsTableViewController: UITableViewController {
         return section.count
     }
 
-    override func tableView(tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+    override func tableView(tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+        let headerView = tableView.dequeueReusableHeaderFooterViewWithIdentifier(SectionHeaderIdentifier) as! SettingsTableSectionHeaderView
         let section = settings[section]
-        return section.title?.string
+        if let sectionTitle = section.title?.string {
+            headerView.titleLabel.text = sectionTitle
+        }
+
+        return headerView
+    }
+
+    override func tableView(tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        // empty headers should be 13px high, but headers with text should be 44
+        var height: CGFloat = 13
+        let section = settings[section]
+        if let sectionTitle = section.title {
+            if sectionTitle.length > 0 {
+                height = 44
+            }
+        }
+        return height
     }
 
     override func tableView(tableView: UITableView, willSelectRowAtIndexPath indexPath: NSIndexPath) -> NSIndexPath? {
@@ -368,5 +633,49 @@ class SettingsTableViewController: UITableViewController {
             setting.onClick(navigationController)
         }
         return nil
+    }
+}
+
+private class SettingsTableSectionHeaderView: UITableViewHeaderFooterView {
+    var titleLabel: UILabel = {
+        var headerLabel = UILabel()
+        var frame = headerLabel.frame
+        frame.origin.x = 15
+        frame.origin.y = 17
+        headerLabel.frame = frame
+        headerLabel.textColor = AppConstants.TableViewHeaderTextColor
+        headerLabel.font = AppConstants.DefaultStandardFontBold
+        return headerLabel
+    }()
+
+    override init(reuseIdentifier: String?) {
+        super.init(reuseIdentifier: reuseIdentifier)
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        self.backgroundColor = AppConstants.TableViewHeaderBackgroundColor
+        addSubview(titleLabel)
+    }
+
+
+    required init(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private override func drawRect(rect: CGRect) {
+        let topBorder = CALayer()
+        topBorder.frame = CGRectMake(0.0, 0.0, rect.size.width, 0.5)
+        topBorder.backgroundColor = AppConstants.SeparatorColor.CGColor
+        layer.addSublayer(topBorder)
+        let bottomBorder = CALayer()
+        bottomBorder.frame = CGRectMake(0.0, rect.size.height - 0.5, rect.size.width, 0.5)
+        bottomBorder.backgroundColor = AppConstants.SeparatorColor.CGColor
+        layer.addSublayer(bottomBorder)
+    }
+
+    private override func layoutSubviews() {
+        super.layoutSubviews()
+        titleLabel.sizeToFit()
     }
 }

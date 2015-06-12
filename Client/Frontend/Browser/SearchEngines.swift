@@ -5,8 +5,6 @@
 import Foundation
 import Shared
 
-let DefaultSearchEngineName = "Yahoo"
-
 private let OrderedEngineNames = "search.orderedEngineNames"
 private let DisabledEngineNames = "search.disabledEngineNames"
 private let ShowSearchSuggestionsOptIn = "search.suggestions.showOptIn"
@@ -124,44 +122,78 @@ class SearchEngines {
     // particular order.
     class func getUnorderedEngines() -> [OpenSearchEngine] {
         var error: NSError?
-        let path = NSBundle.mainBundle().resourcePath?.stringByAppendingPathComponent("Locales/en-US/searchplugins")
 
-        if path == nil {
-            println("Error: Could not find search engine directory")
-            return []
+        let pluginBasePath = NSBundle.mainBundle().resourcePath!.stringByAppendingPathComponent("SearchPlugins")
+        let language = NSLocale.preferredLanguages().first as! String
+        let fallbackDirectory = pluginBasePath.stringByAppendingPathComponent("en")
+
+        // Look for search plugins in the following order:
+        //   1) the full language ID
+        //   2) the language ID without the dialect
+        //   3) the fallback language (English)
+        // For example, "fr-CA" would look for plugins in this order: 1) fr-CA, 2) fr, 3) en.
+        var searchDirectory = pluginBasePath.stringByAppendingPathComponent(language)
+        if !NSFileManager.defaultManager().fileExistsAtPath(searchDirectory) {
+            let languageWithoutDialect = language.componentsSeparatedByString("-").first!
+            searchDirectory = pluginBasePath.stringByAppendingPathComponent(languageWithoutDialect)
+            if language == languageWithoutDialect || !NSFileManager.defaultManager().fileExistsAtPath(searchDirectory) {
+                searchDirectory = fallbackDirectory
+            }
         }
 
-        let directory = NSFileManager.defaultManager().contentsOfDirectoryAtPath(path!, error: &error)
-
-        if error != nil {
-            println("Could not fetch search engines")
-            return []
-        }
+        let index = searchDirectory.stringByAppendingPathComponent("list.txt")
+        let listFile = String(contentsOfFile: index, encoding: NSUTF8StringEncoding, error: &error)
+        let engineNames = listFile!
+            .stringByTrimmingCharactersInSet(NSCharacterSet.newlineCharacterSet())
+            .componentsSeparatedByCharactersInSet(NSCharacterSet.newlineCharacterSet())
+        assert(error == nil, "Read the list of search engines")
 
         var engines = [OpenSearchEngine]()
         let parser = OpenSearchParser(pluginMode: true)
-        for file in directory! {
-            let fullPath = path!.stringByAppendingPathComponent(file as! String)
+        for engineName in engineNames {
+            // Search the current localized search plugins directory for the search engine.
+            // If it doesn't exist, fall back to English.
+            var fullPath = searchDirectory.stringByAppendingPathComponent("\(engineName).xml")
+            if !NSFileManager.defaultManager().fileExistsAtPath(fullPath) {
+                fullPath = fallbackDirectory.stringByAppendingPathComponent("\(engineName).xml")
+            }
+            assert(NSFileManager.defaultManager().fileExistsAtPath(fullPath), "\(fullPath) exists")
+
             let engine = parser.parse(fullPath)
+            assert(engine != nil, "Engine at \(fullPath) successfully parsed")
+
             engines.append(engine!)
         }
 
-        return engines.sorted({ e, _ in e.shortName == DefaultSearchEngineName })
+        let defaultEngineFile = searchDirectory.stringByAppendingPathComponent("default.txt")
+        let defaultEngineName = String(contentsOfFile: defaultEngineFile, encoding: NSUTF8StringEncoding, error: nil)?.stringByTrimmingCharactersInSet(NSCharacterSet.whitespaceAndNewlineCharacterSet())
+
+        return engines.sorted({ e, _ in e.shortName == defaultEngineName })
     }
 
     // Get all known search engines, possibly as ordered by the user.
     private func getOrderedEngines() -> [OpenSearchEngine] {
         let unorderedEngines = SearchEngines.getUnorderedEngines()
         if let orderedEngineNames = prefs.stringArrayForKey(OrderedEngineNames) {
-            var orderedEngines = [OpenSearchEngine]()
-            for engineName in orderedEngineNames {
-                for engine in unorderedEngines {
-                    if engine.shortName == engineName {
-                        orderedEngines.append(engine)
-                    }
+            // We have a persisted order of engines, so try to use that order.
+            // We may have found engines that weren't persisted in the ordered list
+            // (if the user changed locales or added a new engine); these engines
+            // will be appended to the end of the list.
+            return unorderedEngines.sorted { engine1, engine2 in
+                let index1 = find(orderedEngineNames, engine1.shortName)
+                let index2 = find(orderedEngineNames, engine2.shortName)
+
+                if index1 == nil && index2 == nil {
+                    return engine1.shortName < engine2.shortName
                 }
+
+                // nil < N for all non-nil values of N.
+                if index1 == nil || index2 == nil {
+                    return index1 > index2
+                }
+
+                return index1 < index2
             }
-            return orderedEngines
         } else {
             // We haven't persisted the engine order, so return whatever order we got from disk.
             return unorderedEngines
