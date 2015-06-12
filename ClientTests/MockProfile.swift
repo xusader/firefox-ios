@@ -10,6 +10,22 @@ import Storage
 import Sync
 import XCTest
 
+public class MockSyncManager: SyncManager {
+    public func syncClients() -> SyncResult { return deferResult(.Completed) }
+    public func syncClientsThenTabs() -> SyncResult { return deferResult(.Completed) }
+    public func syncHistory() -> SyncResult { return deferResult(.Completed) }
+
+    public func beginTimedHistorySync() {}
+    public func endTimedHistorySync() {}
+
+    public func onAddedAccount() -> Success {
+        return succeed()
+    }
+    public func onRemovedAccount(account: FirefoxAccount?) -> Success {
+        return succeed()
+    }
+}
+
 public class MockProfile: Profile {
     private let name: String = "mockaccount"
 
@@ -19,48 +35,59 @@ public class MockProfile: Profile {
 
     lazy var db: BrowserDB = {
         return BrowserDB(files: self.files)
-    } ()
+    }()
+
+    /**
+     * Favicons, history, and bookmarks are all stored in one intermeshed
+     * collection of tables.
+     */
+    private lazy var places: protocol<BrowserHistory, Favicons, SyncableHistory> = {
+        return SQLiteHistory(db: self.db)
+    }()
+
+    var favicons: Favicons {
+        return self.places
+    }
+
+    var history: protocol<BrowserHistory, SyncableHistory> {
+        return self.places
+    }
+
+    lazy var syncManager: SyncManager = {
+        return MockSyncManager()
+    }()
 
     lazy var bookmarks: protocol<BookmarksModelFactory, ShareToDestination> = {
-        // Eventually this will be a SyncingBookmarksModel or an OfflineBookmarksModel, perhaps.
-        return BookmarksSqliteFactory(db: self.db)
-        } ()
+        return SQLiteBookmarks(db: self.db, favicons: self.places)
+    }()
 
     lazy var searchEngines: SearchEngines = {
         return SearchEngines(prefs: self.prefs)
-        } ()
+    }()
 
     lazy var prefs: Prefs = {
         return MockProfilePrefs()
-        } ()
+    }()
 
     lazy var files: FileAccessor = {
         return ProfileFileAccessor(profile: self)
-        } ()
-
-    lazy var favicons: Favicons = {
-        return SQLiteFavicons(db: self.db)
-        }()
-
-    lazy var history: History = {
-        return SQLiteHistory(db: self.db)
-        }()
+    }()
 
     lazy var readingList: ReadingListService? = {
         return ReadingListService(profileStoragePath: self.files.rootPath)
-        }()
+    }()
 
     private lazy var remoteClientsAndTabs: RemoteClientsAndTabs = {
         return SQLiteRemoteClientsAndTabs(db: self.db)
-        }()
+    }()
 
-    lazy var passwords: Passwords = {
-        return MockPasswords(files: self.files)
-        }()
+    lazy var logins: Logins = {
+        return MockLogins(files: self.files)
+    }()
 
     lazy var thumbnails: Thumbnails = {
         return SDWebThumbnails(files: self.files)
-        }()
+    }()
 
     let accountConfiguration: FirefoxAccountConfiguration = ProductionFirefoxAccountConfiguration()
     var account: FirefoxAccount? = nil
@@ -69,8 +96,15 @@ public class MockProfile: Profile {
         return account
     }
 
-    func setAccount(account: FirefoxAccount?) {
+    func setAccount(account: FirefoxAccount) {
         self.account = account
+        self.syncManager.onAddedAccount()
+    }
+
+    func removeAccount() {
+        let old = self.account
+        self.account = nil
+        self.syncManager.onRemovedAccount(old)
     }
 
     func getClients() -> Deferred<Result<[RemoteClient]>> {

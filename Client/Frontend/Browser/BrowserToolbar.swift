@@ -4,7 +4,7 @@
 
 import Foundation
 import UIKit
-import Snap
+import SnapKit
 
 @objc
 protocol BrowserToolbarProtocol {
@@ -16,9 +16,10 @@ protocol BrowserToolbarProtocol {
     var stopReloadButton: UIButton { get }
 
     func updateBackStatus(canGoBack: Bool)
-    func updateFowardStatus(canGoForward: Bool)
+    func updateForwardStatus(canGoForward: Bool)
     func updateBookmarkStatus(isBookmarked: Bool)
     func updateReloadStatus(isLoading: Bool)
+    func updatePageStatus(#isWebPage: Bool)
 }
 
 @objc
@@ -37,9 +38,6 @@ protocol BrowserToolbarDelegate: class {
 @objc
 public class BrowserToolbarHelper {
     let toolbar: BrowserToolbarProtocol
-
-    private let ButtonInset = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
-    private let NavButtonInset = UIEdgeInsets(top: 12, left: 10, bottom: 12, right: 10)
 
     let ImageReload = UIImage(named: "reload")
     let ImageReloadPressed = UIImage(named: "reloadPressed")
@@ -64,39 +62,34 @@ public class BrowserToolbarHelper {
 
     init(toolbar: BrowserToolbarProtocol) {
         self.toolbar = toolbar
-        let inset: CGFloat = UIScreen.mainScreen().traitCollection.verticalSizeClass == .Regular ? 10 : 2
-        let ButtonInset = UIEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
 
         toolbar.backButton.setImage(UIImage(named: "back"), forState: .Normal)
         toolbar.backButton.setImage(UIImage(named: "backPressed"), forState: .Highlighted)
         toolbar.backButton.accessibilityLabel = NSLocalizedString("Back", comment: "Accessibility Label for the browser toolbar Back button")
-        toolbar.backButton.accessibilityHint = NSLocalizedString("Double tap and hold to open history", comment: "")
+        //toolbar.backButton.accessibilityHint = NSLocalizedString("Double tap and hold to open history", comment: "")
         var longPressGestureBackButton = UILongPressGestureRecognizer(target: self, action: "SELdidLongPressBack:")
         toolbar.backButton.addGestureRecognizer(longPressGestureBackButton)
-        toolbar.backButton.contentEdgeInsets = NavButtonInset
         toolbar.backButton.addTarget(self, action: "SELdidClickBack", forControlEvents: UIControlEvents.TouchUpInside)
 
         toolbar.forwardButton.setImage(UIImage(named: "forward"), forState: .Normal)
         toolbar.forwardButton.setImage(UIImage(named: "forwardPressed"), forState: .Highlighted)
         toolbar.forwardButton.accessibilityLabel = NSLocalizedString("Forward", comment: "Accessibility Label for the browser toolbar Forward button")
-        toolbar.forwardButton.accessibilityHint = NSLocalizedString("Double tap and hold to open history", comment: "")
+        //toolbar.forwardButton.accessibilityHint = NSLocalizedString("Double tap and hold to open history", comment: "")
         var longPressGestureForwardButton = UILongPressGestureRecognizer(target: self, action: "SELdidLongPressForward:")
         toolbar.forwardButton.addGestureRecognizer(longPressGestureForwardButton)
         toolbar.forwardButton.addTarget(self, action: "SELdidClickForward", forControlEvents: UIControlEvents.TouchUpInside)
-        toolbar.forwardButton.contentEdgeInsets = NavButtonInset
 
         toolbar.stopReloadButton.setImage(UIImage(named: "reload"), forState: .Normal)
         toolbar.stopReloadButton.setImage(UIImage(named: "reloadPressed"), forState: .Highlighted)
         toolbar.stopReloadButton.accessibilityLabel = NSLocalizedString("Reload", comment: "Accessibility Label for the browser toolbar Reload button")
         toolbar.stopReloadButton.accessibilityHint = NSLocalizedString("Tap to reload page", comment: "")
         toolbar.stopReloadButton.addTarget(self, action: "SELdidClickStopReload", forControlEvents: UIControlEvents.TouchUpInside)
-        toolbar.stopReloadButton.contentEdgeInsets = NavButtonInset
 
         toolbar.shareButton.setImage(UIImage(named: "send"), forState: .Normal)
         toolbar.shareButton.setImage(UIImage(named: "sendPressed"), forState: .Highlighted)
         toolbar.shareButton.accessibilityLabel = NSLocalizedString("Share", comment: "Accessibility Label for the browser toolbar Share button")
         toolbar.shareButton.addTarget(self, action: "SELdidClickShare", forControlEvents: UIControlEvents.TouchUpInside)
-        toolbar.shareButton.contentEdgeInsets = ButtonInset
+        toolbar.bookmarkButton.contentMode = UIViewContentMode.Center
 
         toolbar.bookmarkButton.setImage(UIImage(named: "bookmark"), forState: .Normal)
         toolbar.bookmarkButton.setImage(UIImage(named: "bookmarked"), forState: UIControlState.Selected)
@@ -104,7 +97,6 @@ public class BrowserToolbarHelper {
         var longPressGestureBookmarkButton = UILongPressGestureRecognizer(target: self, action: "SELdidLongPressBookmark:")
         toolbar.bookmarkButton.addGestureRecognizer(longPressGestureBookmarkButton)
         toolbar.bookmarkButton.addTarget(self, action: "SELdidClickBookmark", forControlEvents: UIControlEvents.TouchUpInside)
-        toolbar.bookmarkButton.contentEdgeInsets = ButtonInset
     }
 
     func SELdidClickBack() {
@@ -191,7 +183,7 @@ class BrowserToolbar: Toolbar, BrowserToolbarProtocol {
         backButton.enabled = canGoBack
     }
 
-    func updateFowardStatus(canGoForward: Bool) {
+    func updateForwardStatus(canGoForward: Bool) {
         forwardButton.enabled = canGoForward
     }
 
@@ -203,4 +195,22 @@ class BrowserToolbar: Toolbar, BrowserToolbarProtocol {
         helper?.updateReloadStatus(isLoading)
     }
 
+    func updatePageStatus(#isWebPage: Bool) {
+        bookmarkButton.enabled = isWebPage
+        stopReloadButton.enabled = isWebPage
+        shareButton.enabled = isWebPage
+    }
+
+    override func drawRect(rect: CGRect) {
+        let context = UIGraphicsGetCurrentContext()
+        drawLine(context, start: CGPoint(x: 0, y: 0), end: CGPoint(x: frame.width, y: 0))
+    }
+
+    private func drawLine(context: CGContextRef, start: CGPoint, end: CGPoint) {
+        CGContextSetStrokeColorWithColor(context, UIColor.blackColor().colorWithAlphaComponent(0.05).CGColor)
+        CGContextSetLineWidth(context, 2)
+        CGContextMoveToPoint(context, start.x, start.y)
+        CGContextAddLineToPoint(context, end.x, end.y)
+        CGContextStrokePath(context)
+    }
 }

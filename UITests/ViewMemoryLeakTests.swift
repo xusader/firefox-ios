@@ -16,10 +16,7 @@ class ViewMemoryLeakTests: KIFTestCase, UITextFieldDelegate {
     }
 
     override func tearDown() {
-        // Go back to about:home to reset the UI state between tests.
-        tester().tapViewWithAccessibilityLabel("URL")
-        let url = "about:home\n"
-        tester().clearTextFromAndThenEnterText(url, intoViewWithAccessibilityLabel: "Address and Search")
+        BrowserUtils.resetToAboutHome(tester())
     }
 
     func testAboutHomeDisposed() {
@@ -28,8 +25,8 @@ class ViewMemoryLeakTests: KIFTestCase, UITextFieldDelegate {
         weak var aboutHomeController = getChildViewController(browserViewController, childClass: "HomePanelViewController")
 
         // Change the page to make about:home go away.
-        tester().tapViewWithAccessibilityLabel("URL")
-        let url = "\(webRoot)/?page=1"
+        tester().tapViewWithAccessibilityIdentifier("url")
+        let url = "\(webRoot)/numberedPage.html?page=1"
         tester().clearTextFromAndThenEnterText("\(url)\n", intoViewWithAccessibilityLabel: "Address and Search")
 
         tester().runBlock { _ in
@@ -40,8 +37,8 @@ class ViewMemoryLeakTests: KIFTestCase, UITextFieldDelegate {
 
     func testSearchViewControllerDisposed() {
         // Type the URL to make the search controller appear.
-        tester().tapViewWithAccessibilityLabel("URL")
-        let url = "\(webRoot)/?page=1"
+        tester().tapViewWithAccessibilityIdentifier("url")
+        let url = "\(webRoot)/numberedPage.html?page=1"
         tester().clearTextFromAndThenEnterText(url, intoViewWithAccessibilityLabel: "Address and Search")
         let browserViewController = UIApplication.sharedApplication().keyWindow!.rootViewController!
         weak var searchViewController = getChildViewController(browserViewController, childClass: "SearchViewController")
@@ -63,12 +60,12 @@ class ViewMemoryLeakTests: KIFTestCase, UITextFieldDelegate {
         tester().tapViewWithAccessibilityLabel("Show Tabs")
         tester().waitForViewWithAccessibilityLabel("Tabs Tray")
         weak var tabTrayController = browserViewController.presentedViewController
-        weak var tabCell = tester().waitForTappableViewWithAccessibilityLabel("about:home")
+        weak var tabCell = tester().waitForTappableViewWithAccessibilityLabel("home")
         XCTAssertNotNil(tabTrayController, "Got tab tray reference")
         XCTAssertNotNil(tabCell, "Got tab cell reference")
 
         // Leave the tab tray.
-        tester().tapViewWithAccessibilityLabel("about:home")
+        tester().tapViewWithAccessibilityLabel("home")
 
         tester().runBlock { _ in
             return (tabTrayController == nil) ? KIFTestStepResult.Success : KIFTestStepResult.Wait
@@ -79,6 +76,22 @@ class ViewMemoryLeakTests: KIFTestCase, UITextFieldDelegate {
             return (tabCell == nil) ? KIFTestStepResult.Success : KIFTestStepResult.Wait
         }
         XCTAssertNil(tabCell, "Tab tray cell disposed")
+    }
+
+    func testWebViewDisposed() {
+        weak var webView = tester().waitForViewWithAccessibilityLabel("Web content")
+        XCTAssertNotNil(webView, "webView found")
+
+        tester().tapViewWithAccessibilityLabel("Show Tabs")
+        let tabsView = tester().waitForViewWithAccessibilityLabel("Tabs Tray").subviews.first as! UICollectionView
+        let cell = tabsView.cellForItemAtIndexPath(NSIndexPath(forItem: 0, inSection: 0))!
+        tester().swipeViewWithAccessibilityLabel(cell.accessibilityLabel, inDirection: KIFSwipeDirection.Left)
+        tester().waitForTappableViewWithAccessibilityLabel("Show Tabs")
+
+        tester().runBlock { _ in
+            return (webView == nil) ? KIFTestStepResult.Success : KIFTestStepResult.Wait
+        }
+        XCTAssertNil(webView, "webView disposed")
     }
 
     private func getChildViewController(parent: UIViewController, childClass: String) -> UIViewController {

@@ -1,5 +1,5 @@
 import Foundation
-import Snap
+import SnapKit
 
 class Toolbar : UIView {
     var drawTopBorder = false
@@ -16,7 +16,7 @@ class Toolbar : UIView {
     }
 
     private func drawLine(context: CGContextRef, start: CGPoint, end: CGPoint) {
-        CGContextSetStrokeColorWithColor(context, UIColor.darkGrayColor().CGColor)
+        CGContextSetStrokeColorWithColor(context, AppConstants.BorderColor.CGColor)
         CGContextSetLineWidth(context, 1)
         CGContextMoveToPoint(context, start.x, start.y)
         CGContextAddLineToPoint(context, end.x, end.y)

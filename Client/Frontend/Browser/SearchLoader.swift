@@ -16,11 +16,11 @@ typealias SearchLoader = _SearchLoader<AnyObject, AnyObject>
  * Shared data source for the SearchViewController and the URLBar domain completion.
  * Since both of these use the same SQL query, we can perform the query once and dispatch the results.
  */
-class _SearchLoader<UnusedA, UnusedB>: Loader<Cursor, SearchViewController> {
-    private let history: History
+class _SearchLoader<UnusedA, UnusedB>: Loader<Cursor<Site>, SearchViewController> {
+    private let history: BrowserHistory
     private let urlBar: URLBarView
 
-    init(history: History, urlBar: URLBarView) {
+    init(history: BrowserHistory, urlBar: URLBarView) {
         self.history = history
         self.urlBar = urlBar
         super.init()
@@ -33,26 +33,23 @@ class _SearchLoader<UnusedA, UnusedB>: Loader<Cursor, SearchViewController> {
                 return
             }
 
-            let options = QueryOptions(filter: query, filterType: FilterType.Url, sort: QuerySort.Frecency)
-            self.history.get(options, complete: { (cursor: Cursor) in
-                if cursor.status != .Success {
-                    println("Err: \(cursor.statusMessage)")
-                } else {
+            self.history.getSitesByFrecencyWithLimit(100, whereURLContains: query).uponQueue(dispatch_get_main_queue()) { result in
+                // Failed cursors are excluded in .get().
+                if let cursor = result.successValue {
                     self.load(cursor)
                     self.urlBar.setAutocompleteSuggestion(self.getAutocompleteSuggestion(cursor))
                 }
-            })
+            }
         }
     }
 
-    private func getAutocompleteSuggestion(cursor: Cursor) -> String? {
+    private func getAutocompleteSuggestion(cursor: Cursor<Site>) -> String? {
         for result in cursor {
-            let url = (result as! Site).url
-
             // Extract the pre-path substring from the URL. This should be more efficient than parsing via
             // NSURL since we need to only look at the beginning of the string.
             // Note that we won't match non-HTTP(S) URLs.
-            if let match = URLBeforePathRegex.firstMatchInString(url, options: nil, range: NSRange(location: 0, length: count(url))) {
+            if let url = result?.url,
+                   match = URLBeforePathRegex.firstMatchInString(url, options: nil, range: NSRange(location: 0, length: count(url))) {
                 // If the pre-path component starts with the filter, just use it as is.
                 let prePathURL = (url as NSString).substringWithRange(match.rangeAtIndex(0))
                 if prePathURL.startsWith(query) {

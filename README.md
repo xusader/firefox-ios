@@ -40,8 +40,21 @@ Building the code
 
 It is possible to use [App Code](https://www.jetbrains.com/objc/download/) instead of Xcode, but you will still require the Xcode developer tools.
 
-Contributor guidelines
-----------------------
+## Contributor guidelines
+
+### Creating a pull request
+* All pull requests must be associated with a specific bug in [Bugzilla](http://bugzilla.mozilla.org).
+ * If a bug corresponding to the fix does not yet exist, please [file it](https://bugzilla.mozilla.org/enter_bug.cgi?op_sys=iOS&product=Firefox%20for%20iOS&rep_platform=All).
+ * You'll need to be logged in to create/update bugs, but note that Bugzilla allows you to sign in with your GitHub account.
+* Use the bug number/title as the name of pull request. For example, a pull request for [bug 1135920](https://bugzilla.mozilla.org/show_bug.cgi?id=1135920) would be titled "Bug 1135920 - Create a top sites panel".
+* Finally, upload an attachment to the bug pointing to the GitHub pull request.
+ 1. Click <b>Add an attachment</b>.
+ 2. Next to <b>File</b>, click <b>Paste text as attachment</b>.
+ 3. Paste the URL of the GitHub pull request.
+ 4. Enter "Pull request" as the description.
+ 5. Finally, flag the pull request for review. Set the <b>review</b> field to "?", then enter the name of the person you'd like to review your patch. If you don't know whom to add as the reviewer, click <b>suggested reviewers</b> and select a name from the dropdown list.
+
+<b>Pro tip: To simplify the attachment step, install the [Github Bugzilla Tweaks](https://github.com/autonome/Github-Bugzilla-Tweaks) addon. This will add a button that takes care of the first four attachment steps for you.</b>
 
 ### Swift style
 * Swift code should generally follow the conventions listed at https://github.com/raywenderlich/swift-style-guide.
@@ -74,7 +87,7 @@ If a dependent project has a team identifier set, Xcode will complain that it ca
 
 If a dependent project is configured to use a Distribution Code Signing Identity for a Release build, Xcode will complain that such a profile is not available. (Since we only have development profiles on our workstations). It is best to configure both Debug and Release Build Configurations to use the automatic "iPhone Developer" Code Signing Identity. This will pick the right thing on your local build.
 
-Most if this is fixable and can be reported upstream.
+Most of this is fixable and can be reported upstream.
 
 If you add a new dependency, ping @st3fan and he'll make sure things work correctly on our integration (xcode server) and dogfood builders.
 

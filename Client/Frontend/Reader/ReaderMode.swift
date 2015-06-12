@@ -207,14 +207,14 @@ class ReaderMode: BrowserHelper {
         return "ReaderMode"
     }
 
-    required init?(browser: Browser) {
+    required init(browser: Browser) {
         self.browser = browser
 
         // This is a WKUserScript at the moment because webView.evaluateJavaScript() fails with an unspecified error. Possibly script size related.
         if let path = NSBundle.mainBundle().pathForResource("Readability", ofType: "js") {
             if let source = NSString(contentsOfFile: path, encoding: NSUTF8StringEncoding, error: nil) as? String {
                 var userScript = WKUserScript(source: source, injectionTime: WKUserScriptInjectionTime.AtDocumentEnd, forMainFrameOnly: true)
-                browser.webView.configuration.userContentController.addUserScript(userScript)
+                browser.webView!.configuration.userContentController.addUserScript(userScript)
             }
         }
 
@@ -222,7 +222,7 @@ class ReaderMode: BrowserHelper {
         if let path = NSBundle.mainBundle().pathForResource("ReaderMode", ofType: "js") {
             if let source = NSString(contentsOfFile: path, encoding: NSUTF8StringEncoding, error: nil) as? String {
                 var userScript = WKUserScript(source: source, injectionTime: WKUserScriptInjectionTime.AtDocumentEnd, forMainFrameOnly: true)
-                browser.webView.configuration.userContentController.addUserScript(userScript)
+                browser.webView!.configuration.userContentController.addUserScript(userScript)
             }
         }
     }
@@ -266,7 +266,7 @@ class ReaderMode: BrowserHelper {
     var style: ReaderModeStyle = DefaultReaderModeStyle {
         didSet {
             if state == ReaderModeState.Active {
-                browser!.webView.evaluateJavaScript("\(ReaderModeNamespace).setStyle(\(style.encode()))", completionHandler: {
+                browser!.webView?.evaluateJavaScript("\(ReaderModeNamespace).setStyle(\(style.encode()))", completionHandler: {
                     (object, error) -> Void in
                     return
                 })

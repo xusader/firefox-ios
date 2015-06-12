@@ -4,6 +4,9 @@
 
 import Foundation
 import Shared
+import XCGLogger
+
+private let log = XCGLogger.defaultInstance()
 
 let ONE_YEAR_IN_SECONDS = 365 * 24 * 60 * 60;
 
@@ -43,13 +46,13 @@ public class Record<T: CleartextPayloadJSON> {
     // TODO: consider using error tuples.
     public class func fromEnvelope(envelope: EnvelopeJSON, payloadFactory: (String) -> T?) -> Record<T>? {
         if !(envelope.isValid()) {
-            println("Invalid envelope.")
+            log.error("Invalid envelope.")
             return nil
         }
 
         let payload = payloadFactory(envelope.payload)
         if (payload == nil) {
-            println("Unable to parse payload.")
+            log.error("Unable to parse payload.")
             return nil
         }
 
@@ -57,7 +60,7 @@ public class Record<T: CleartextPayloadJSON> {
             return Record<T>(envelope: envelope, payload: payload!)
         }
 
-        println("Invalid payload \(payload!.toString(pretty: true)).")
+        log.error("Invalid payload \(payload!.toString(pretty: true)).")
         return nil
     }
 
@@ -70,7 +73,7 @@ public class Record<T: CleartextPayloadJSON> {
         self.init(id: envelope.id, payload: payload, modified: envelope.modified, sortindex: envelope.sortindex)
     }
 
-    init(id: String, payload: T, modified: Timestamp = Timestamp(time(nil)), sortindex: Int = 0, ttl: Int = ONE_YEAR_IN_SECONDS) {
+    init(id: GUID, payload: T, modified: Timestamp = Timestamp(time(nil)), sortindex: Int = 0, ttl: Int = ONE_YEAR_IN_SECONDS) {
         self.id = id
 
         self.payload = payload;

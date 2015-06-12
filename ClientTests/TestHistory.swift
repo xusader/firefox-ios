@@ -4,16 +4,16 @@ import Storage
 
 class TestHistory : ProfileTest {
 
-    private func innerAddSite(history: History, url: String, title: String, callback: (success: Bool) -> Void) {
+    private func innerAddSite(history: BrowserHistory, url: String, title: String, callback: (success: Bool) -> Void) {
         // Add an entry
         let site = Site(url: url, title: title)
-        let visit = Visit(site: site, date: NSDate())
-        history.addVisit(visit) { success in
-            callback(success: success)
+        let visit = SiteVisit(site: site, date: NSDate.nowMicroseconds())
+        history.addLocalVisit(visit).upon {
+            callback(success: $0.isSuccess)
         }
     }
 
-    private func addSite(history: History, url: String, title: String, s: Bool = true) {
+    private func addSite(history: BrowserHistory, url: String, title: String, s: Bool = true) {
         let expectation = self.expectationWithDescription("Wait for history")
         innerAddSite(history, url: url, title: title) { success in
             XCTAssertEqual(success, s, "Site added \(url)")
@@ -21,15 +21,16 @@ class TestHistory : ProfileTest {
         }
     }
 
-    private func innerCheckSites(history: History, callback: (cursor: Cursor) -> Void) {
+    private func innerCheckSites(history: BrowserHistory, callback: (cursor: Cursor<Site>) -> Void) {
         // Retrieve the entry
-        history.get(nil, complete: { cursor in
-            callback(cursor: cursor)
-        })
+        history.getSitesByLastVisit(100).upon {
+            XCTAssertTrue($0.isSuccess)
+            callback(cursor: $0.successValue!)
+        }
     }
 
 
-    private func checkSites(history: History, urls: [String: String], s: Bool = true) {
+    private func checkSites(history: BrowserHistory, urls: [String: String], s: Bool = true) {
         let expectation = self.expectationWithDescription("Wait for history")
 
         // Retrieve the entry
@@ -38,7 +39,7 @@ class TestHistory : ProfileTest {
             XCTAssertEqual(cursor.count, urls.count, "cursor has \(urls.count) entries")
 
             for index in 0..<cursor.count {
-                let s = cursor[index] as! Site
+                let s = cursor[index]!
                 XCTAssertNotNil(s, "cursor has a site for entry")
                 let title = urls[s.url]
                 XCTAssertNotNil(title, "Found right url")
@@ -50,13 +51,11 @@ class TestHistory : ProfileTest {
         self.waitForExpectationsWithTimeout(100, handler: nil)
     }
 
-    private func innerClear(history: History, callback: (s: Bool) -> Void) {
-        history.clear({ success in
-            callback(s: success)
-        })
+    private func innerClear(history: BrowserHistory, callback: (s: Bool) -> Void) {
+        history.clearHistory().upon { callback(s: $0.isSuccess) }
     }
 
-    private func clear(history: History, s: Bool = true) {
+    private func clear(history: BrowserHistory, s: Bool = true) {
         let expectation = self.expectationWithDescription("Wait for history")
 
         innerClear(history) { success in
@@ -67,12 +66,13 @@ class TestHistory : ProfileTest {
         self.waitForExpectationsWithTimeout(100, handler: nil)
     }
 
-    private func checkVisits(history: History, url: String) {
+    private func checkVisits(history: BrowserHistory, url: String) {
         let expectation = self.expectationWithDescription("Wait for history")
-        history.get(nil) { cursor in
-            let options = QueryOptions()
-            options.filter = url
-            history.get(options) { cursor in
+        history.getSitesByLastVisit(100).upon { result in
+            XCTAssertTrue(result.isSuccess)
+            history.getSitesByFrecencyWithLimit(100, whereURLContains: url).upon { result in
+                XCTAssertTrue(result.isSuccess)
+                let cursor = result.successValue!
                 XCTAssertEqual(cursor.status, CursorStatus.Success, "returned success \(cursor.statusMessage)")
                 // XXX - We don't allow querying much info about visits here anymore, so there isn't a lot to do
                 expectation.fulfill()
@@ -155,7 +155,7 @@ class TestHistory : ProfileTest {
 
             let expectation = self.expectationWithDescription("Wait for history")
             for i in 0..<self.NumThreads {
-                var history = profile.history
+                var history = profile.history as BrowserHistory
                 self.runRandom(&history, queue: queue, cb: { () -> Void in
                     counter++
                     if counter == self.NumThreads {
@@ -171,7 +171,7 @@ class TestHistory : ProfileTest {
     func testRandomThreading2() {
         withTestProfile { profile -> Void in
             var queue = dispatch_queue_create("My Queue", DISPATCH_QUEUE_CONCURRENT)
-            var history = profile.history
+            var history = profile.history as BrowserHistory
             var counter = 0
 
             let expectation = self.expectationWithDescription("Wait for history")
@@ -188,8 +188,8 @@ class TestHistory : ProfileTest {
     }
 
 
-    // Runs a random command on a database. Calls cb when finished
-    private func runRandom(inout history: History, cmdIn: Int, cb: () -> Void) {
+    // Runs a random command on a database. Calls cb when finished.
+    private func runRandom(inout history: BrowserHistory, cmdIn: Int, cb: () -> Void) {
         var cmd = cmdIn
         if cmd < 0 {
             cmd = Int(rand() % 5)
@@ -203,7 +203,7 @@ class TestHistory : ProfileTest {
         case 2...3:
             innerCheckSites(history) { cursor in
                 for site in cursor {
-                    let s = site as! Site
+                    let s = site!
                 }
             }
             cb()
@@ -212,9 +212,9 @@ class TestHistory : ProfileTest {
         }
     }
 
-    // Calls numCmds random methods on this database. val is a counter used by this interally (i.e. always pass zero for it)
-    // Calls cb when finished
-    private func runMultiRandom(inout history: History, val: Int, numCmds: Int, cb: () -> Void) {
+    // Calls numCmds random methods on this database. val is a counter used by this interally (i.e. always pass zero for it).
+    // Calls cb when finished.
+    private func runMultiRandom(inout history: BrowserHistory, val: Int, numCmds: Int, cb: () -> Void) {
         if val == numCmds {
             cb()
             return
@@ -225,8 +225,8 @@ class TestHistory : ProfileTest {
         }
     }
 
-    // Helper for starting a new thread running NumCmds random methods on it. Calls cb when done
-    private func runRandom(inout history: History, queue: dispatch_queue_t, cb: () -> Void) {
+    // Helper for starting a new thread running NumCmds random methods on it. Calls cb when done.
+    private func runRandom(inout history: BrowserHistory, queue: dispatch_queue_t, cb: () -> Void) {
         dispatch_async(queue) {
             // Each thread creates its own history provider
             self.runMultiRandom(&history, val: 0, numCmds: self.NumCmds) { _ in

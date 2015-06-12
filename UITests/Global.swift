@@ -68,7 +68,31 @@ extension KIFUITestActor {
     // TODO: Click element, etc.
 }
 
+class BrowserUtils {
+    /// Close all tabs to restore the browser to startup state.
+    class func resetToAboutHome(tester: KIFUITestActor) {
+        tester.tapViewWithAccessibilityLabel("Show Tabs")
+        let tabsView = tester.waitForViewWithAccessibilityLabel("Tabs Tray").subviews.first as! UICollectionView
+        while tabsView.numberOfItemsInSection(0) > 1 {
+            let cell = tabsView.cellForItemAtIndexPath(NSIndexPath(forItem: 0, inSection: 0))!
+            tester.swipeViewWithAccessibilityLabel(cell.accessibilityLabel, inDirection: KIFSwipeDirection.Left)
+            tester.waitForAbsenceOfViewWithAccessibilityLabel(cell.accessibilityLabel)
+        }
+
+        // When the last tab is closed, the tabs tray will automatically be closed
+        // since a new about:home tab will be selected.
+        let cell = tabsView.cellForItemAtIndexPath(NSIndexPath(forItem: 0, inSection: 0))!
+        tester.swipeViewWithAccessibilityLabel(cell.accessibilityLabel, inDirection: KIFSwipeDirection.Left)
+        tester.waitForTappableViewWithAccessibilityLabel("Show Tabs")
+    }
+}
+
 class SimplePageServer {
+    class func getPageData(name: String, ext: String = "html") -> String {
+        var pageDataPath = NSBundle(forClass: self).pathForResource(name, ofType: ext)!
+        return NSString(contentsOfFile: pageDataPath, encoding: NSUTF8StringEncoding, error: nil)! as String
+    }
+
     class func start() -> String {
         let webServer: GCDWebServer = GCDWebServer()
 
@@ -77,11 +101,26 @@ class SimplePageServer {
             return GCDWebServerDataResponse(data: img, contentType: "image/png")
         }
 
-        webServer.addHandlerForMethod("GET", path: "/", requestClass: GCDWebServerRequest.self) { (request) -> GCDWebServerResponse! in
+        for page in ["noTitle", "readablePage"] {
+            webServer.addHandlerForMethod("GET", path: "/\(page).html", requestClass: GCDWebServerRequest.self) { (request) -> GCDWebServerResponse! in
+                return GCDWebServerDataResponse(HTML: self.getPageData(page))
+            }
+        }
+
+        // we may create more than one of these but we need to give them uniquie accessibility ids in the tab manager so we'll pass in a page number
+        webServer.addHandlerForMethod("GET", path: "/scrollablePage.html", requestClass: GCDWebServerRequest.self) { (request) -> GCDWebServerResponse! in
+            var pageData = self.getPageData("scrollablePage")
             let page = (request.query["page"] as! String).toInt()!
-            var pageDataPath = NSBundle(forClass: self).pathForResource("baseFile", ofType: "html")!
-            var pageData = NSString(contentsOfFile: pageDataPath, encoding: NSUTF8StringEncoding, error: nil)!
             pageData = pageData.stringByReplacingOccurrencesOfString("{page}", withString: page.description)
+            return GCDWebServerDataResponse(HTML: pageData as String)
+        }
+
+        webServer.addHandlerForMethod("GET", path: "/numberedPage.html", requestClass: GCDWebServerRequest.self) { (request) -> GCDWebServerResponse! in
+            var pageData = self.getPageData("numberedPage")
+
+            let page = (request.query["page"] as! String).toInt()!
+            pageData = pageData.stringByReplacingOccurrencesOfString("{page}", withString: page.description)
+
             return GCDWebServerDataResponse(HTML: pageData as String)
         }
 

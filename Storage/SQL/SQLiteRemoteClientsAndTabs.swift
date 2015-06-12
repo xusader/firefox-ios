@@ -8,18 +8,6 @@ import XCGLogger
 
 private let log = XCGLogger.defaultInstance()
 
-public class DatabaseError: ErrorType {
-    let err: NSError?
-
-    public var description: String {
-        return err?.localizedDescription ?? "Unknown database error."
-    }
-
-    init(err: NSError?) {
-        self.err = err
-    }
-}
-
 public class SQLiteRemoteClientsAndTabs: RemoteClientsAndTabs {
     let db: BrowserDB
     let clients = RemoteClientsTable<RemoteClient>()
@@ -69,10 +57,14 @@ public class SQLiteRemoteClientsAndTabs: RemoteClientsAndTabs {
         }
     }
 
-    public func insertOrUpdateTabsForClientGUID(clientGUID: String, tabs: [RemoteTab]) -> Deferred<Result<Int>> {
+    public func insertOrUpdateTabs(tabs: [RemoteTab]) -> Deferred<Result<Int>> {
+        return self.insertOrUpdateTabsForClientGUID(nil, tabs: tabs)
+    }
+
+    public func insertOrUpdateTabsForClientGUID(clientGUID: String?, tabs: [RemoteTab]) -> Deferred<Result<Int>> {
         let deferred = Deferred<Result<Int>>(defaultQueue: dispatch_get_main_queue())
 
-        let deleteQuery = "DELETE FROM \(self.tabs.name) WHERE client_guid = ?"
+        let deleteQuery = "DELETE FROM \(self.tabs.name) WHERE client_guid IS ?"
         let deleteArgs: [AnyObject?] = [clientGUID]
 
         var err: NSError?
@@ -90,11 +82,12 @@ public class SQLiteRemoteClientsAndTabs: RemoteClientsAndTabs {
             for tab in tabs {
                 // We trust that each tab's clientGUID matches the supplied client!
                 // Really tabs shouldn't have a GUID at all. Future cleanup!
-                inserted += self.tabs.insert(connection, item: tab, err: &err)
+                self.tabs.insert(connection, item: tab, err: &err)
                 if let err = err {
                     deferred.fill(Result(failure: DatabaseError(err: err)))
                     return false
                 }
+                inserted++;
             }
 
             deferred.fill(Result(success: inserted))
@@ -145,7 +138,7 @@ public class SQLiteRemoteClientsAndTabs: RemoteClientsAndTabs {
     public func getClients() -> Deferred<Result<[RemoteClient]>> {
         var err: NSError?
 
-        let clientCursor = db.query(&err) { connection, _ in
+        let clientCursor = db.withReadableConnection(&err) { connection, _ in
             return self.clients.query(connection, options: nil)
         }
 
@@ -154,7 +147,7 @@ public class SQLiteRemoteClientsAndTabs: RemoteClientsAndTabs {
             return Deferred(value: Result(failure: DatabaseError(err: err)))
         }
 
-        let clients = clientCursor.mapAsType(RemoteClient.self, f: { $0 })
+        let clients = clientCursor.asArray()
         clientCursor.close()
 
         return Deferred(value: Result(success: clients))
@@ -164,7 +157,7 @@ public class SQLiteRemoteClientsAndTabs: RemoteClientsAndTabs {
         var err: NSError?
 
         // Now find the clients.
-        let clientCursor = db.query(&err) { connection, _ in
+        let clientCursor = db.withReadableConnection(&err) { connection, _ in
             return self.clients.query(connection, options: nil)
         }
 
@@ -173,12 +166,12 @@ public class SQLiteRemoteClientsAndTabs: RemoteClientsAndTabs {
             return Deferred(value: Result(failure: DatabaseError(err: err)))
         }
 
-        let clients = clientCursor.mapAsType(RemoteClient.self, f: { $0 })
+        let clients = clientCursor.asArray()
         clientCursor.close()
 
         log.info("Found \(clients.count) clients in the DB.")
 
-        let tabCursor = db.query(&err) { connection, _ in
+        let tabCursor = db.withReadableConnection(&err) { connection, _ in
             return self.tabs.query(connection, options: nil)
         }
 
@@ -194,11 +187,11 @@ public class SQLiteRemoteClientsAndTabs: RemoteClientsAndTabs {
         // Aggregate clientGUID -> RemoteTab.
         var acc = [String: [RemoteTab]]()
         for tab in tabCursor {
-            if let tab = tab as? RemoteTab {
-                if acc[tab.clientGUID] == nil {
-                    acc[tab.clientGUID] = [tab]
+            if let tab = tab, guid = tab.clientGUID {
+                if acc[guid] == nil {
+                    acc[guid] = [tab]
                 } else {
-                    acc[tab.clientGUID]!.append(tab)
+                    acc[guid]!.append(tab)
                 }
             } else {
                 log.error("Couldn't cast tab \(tab) to RemoteTab.")
@@ -210,15 +203,27 @@ public class SQLiteRemoteClientsAndTabs: RemoteClientsAndTabs {
 
         // Most recent first.
         let sort: (RemoteTab, RemoteTab) -> Bool = { $0.lastUsed > $1.lastUsed }
-        let f: (RemoteClient) -> ClientAndTabs = { client in
-            let guid: String = client.guid
-            let tabs = acc[guid]   // ?.sorted(sort)   // The sort should be unnecessary: the DB does that.
+        let fillTabs: (RemoteClient) -> ClientAndTabs = { client in
+            var tabs: [RemoteTab]? = nil
+            if let guid: String = client.guid {
+                tabs = acc[guid]   // ?.sorted(sort)   // The sort should be unnecessary: the DB does that.
+            }
             return ClientAndTabs(client: client, tabs: tabs ?? [])
         }
 
+        let removeLocalClient: (RemoteClient) -> Bool = { client in
+            return client.guid != nil
+        }
+
         // Why is this whole function synchronous?
-        deferred.fill(Result(success: clients.map(f)))
+        deferred.fill(Result(success: clients.filter(removeLocalClient).map(fillTabs)))
         return deferred
+    }
+
+    public func onRemovedAccount() -> Success {
+        log.info("Clearing clients and tabs after account removal.")
+        // TODO: Bug 1168690 - delete our client and tabs records from the server.
+        return self.clear()
     }
 
     private let debug_enabled = true

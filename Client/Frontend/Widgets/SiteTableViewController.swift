@@ -9,8 +9,8 @@ struct SiteTableViewControllerUX {
     static let HeaderHeight = CGFloat(25)
     static let RowHeight = CGFloat(58)
     static let HeaderBorderColor = UIColor(rgb: 0xCFD5D9).colorWithAlphaComponent(0.8)
-    static let HeaderTextColor = UIColor(rgb: 0x565656)
-    static let HeaderBackgroundColor = UIColor(rgb: 0xECF0F3).colorWithAlphaComponent(0.7)
+    static let HeaderTextColor = UIColor(rgb: 0x232323)
+    static let HeaderBackgroundColor = UIColor(rgb: 0xECF0F3).colorWithAlphaComponent(0.3)
 }
 
 private class SiteTableViewHeader : UITableViewHeaderFooterView {
@@ -31,7 +31,7 @@ private class SiteTableViewHeader : UITableViewHeaderFooterView {
     private func didLoad() {
         addSubview(topBorder)
         addSubview(bottomBorder)
-        backgroundView = UIVisualEffectView(effect: UIBlurEffect(style: .Light))
+        backgroundView = UIVisualEffectView(effect: UIBlurEffect(style: .ExtraLight))
     }
 
     required init(coder aDecoder: NSCoder) {
@@ -45,7 +45,7 @@ private class SiteTableViewHeader : UITableViewHeaderFooterView {
         bottomBorder.backgroundColor = SiteTableViewControllerUX.HeaderBorderColor
         super.layoutSubviews()
 
-        textLabel.font = UIFont(name: UIAccessibilityIsBoldTextEnabled() ? "HelveticaNeue-Bold" : "HelveticaNeue-Medium", size: 11)
+        textLabel.font = UIFont.systemFontOfSize(11, weight: UIFontWeightMedium)
         textLabel.textColor = UIAccessibilityDarkerSystemColorsEnabled() ? UIColor.blackColor() : SiteTableViewControllerUX.HeaderTextColor
         textLabel.textAlignment = .Center
         contentView.backgroundColor = SiteTableViewControllerUX.HeaderBackgroundColor
@@ -63,7 +63,7 @@ class SiteTableViewController: UIViewController, UITableViewDelegate, UITableVie
             reloadData()
         }
     }
-    var data: Cursor = Cursor(status: .Success, msg: "No data set")
+    var data: Cursor<Site> = Cursor<Site>(status: .Success, msg: "No data set")
     var tableView = UITableView()
 
     override func viewDidLoad() {
@@ -81,6 +81,12 @@ class SiteTableViewController: UIViewController, UITableViewDelegate, UITableVie
         tableView.registerClass(SiteTableViewHeader.self, forHeaderFooterViewReuseIdentifier: HeaderIdentifier)
         tableView.layoutMargins = UIEdgeInsetsZero
         tableView.keyboardDismissMode = UIScrollViewKeyboardDismissMode.OnDrag
+        tableView.backgroundColor = AppConstants.PanelBackgroundColor
+        tableView.separatorColor = AppConstants.SeparatorColor
+        tableView.accessibilityIdentifier = "SiteTable"
+
+        // Set an empty footer to prevent empty cells from appearing in the list.
+        tableView.tableFooterView = UIView()
     }
 
     func reloadData() {

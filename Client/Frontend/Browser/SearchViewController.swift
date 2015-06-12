@@ -6,20 +6,20 @@ import UIKit
 import Shared
 import Storage
 
-private let SuggestionBackgroundColor = UIColor(red: 0.95, green: 0.95, blue: 0.95, alpha: 1)
-private let SuggestionBorderColor = UIColor(red: 0.85, green: 0.85, blue: 0.85, alpha: 1)
-private let SuggestionBorderWidth: CGFloat = 0.5
-private let SuggestionCornerRadius: CGFloat = 2
-private let SuggestionFont = UIFont(name: UIAccessibilityIsBoldTextEnabled() ? "HelveticaNeue-Medium" : "HelveticaNeue", size: 12)
-private let SuggestionInsets = UIEdgeInsetsMake(5, 5, 5, 5)
-private let SuggestionMargin: CGFloat = 4
-private let SuggestionCellVerticalPadding: CGFloat = 8
+private let SuggestionBackgroundColor = UIColor(red: 1, green: 1, blue: 1, alpha: 0.8)
+private let SuggestionBorderColor = AppConstants.HighlightBlue
+private let SuggestionBorderWidth: CGFloat = 1
+private let SuggestionCornerRadius: CGFloat = 4
+private let SuggestionFont = UIFont.systemFontOfSize(13, weight: UIFontWeightRegular)
+private let SuggestionInsets = UIEdgeInsetsMake(8, 8, 8, 8)
+private let SuggestionMargin: CGFloat = 8
+private let SuggestionCellVerticalPadding: CGFloat = 10
 private let SuggestionCellMaxRows = 2
 
-private let PromptColor = UIColor(rgb: 0xeef0f3)
-private let PromptFont = UIFont(name: UIAccessibilityIsBoldTextEnabled() ? "HelveticaNeue-Medium" : "HelveticaNeue", size: 12)
-private let PromptYesFont = UIFont(name: "HelveticaNeue-Bold", size: 15)
-private let PromptNoFont = UIFont(name: UIAccessibilityIsBoldTextEnabled() ? "HelveticaNeue-Medium" : "HelveticaNeue", size: 15)
+private let PromptColor = AppConstants.PanelBackgroundColor
+private let PromptFont = UIFont.systemFontOfSize(12, weight: UIFontWeightRegular)
+private let PromptYesFont = UIFont.systemFontOfSize(15, weight: UIFontWeightBold)
+private let PromptNoFont = UIFont.systemFontOfSize(15, weight: UIFontWeightRegular)
 private let PromptInsets = UIEdgeInsetsMake(15, 12, 15, 12)
 private let PromptButtonColor = UIColor(rgb: 0x007aff)
 
@@ -33,9 +33,9 @@ private let EngineButtonInsets = UIEdgeInsetsMake(0.5, 0.5, 0.5, 0.5)
 private let EngineButtonHeight: Float = 44
 private let EngineButtonWidth = EngineButtonHeight * 1.5
 
-private let PromptMessage = NSLocalizedString("Turn on search suggestions?", tableName: "search", comment: "Prompt shown before enabling provider search queries")
-private let PromptYes = NSLocalizedString("Yes", tableName: "search", comment: "For search suggestions prompt. This string should be short so it fits nicely on the prompt row.")
-private let PromptNo = NSLocalizedString("No", tableName: "search", comment: "For search suggestions prompt. This string should be short so it fits nicely on the prompt row.")
+private let PromptMessage = NSLocalizedString("Turn on search suggestions?", tableName: "Search", comment: "Prompt shown before enabling provider search queries")
+private let PromptYes = NSLocalizedString("Yes", tableName: "Search", comment: "For search suggestions prompt. This string should be short so it fits nicely on the prompt row.")
+private let PromptNo = NSLocalizedString("No", tableName: "Search", comment: "For search suggestions prompt. This string should be short so it fits nicely on the prompt row.")
 
 private enum SearchListSection: Int {
     case SearchSuggestions
@@ -57,6 +57,10 @@ class SearchViewController: SiteTableViewController, KeyboardHelperDelegate, Loa
     private let searchEngineScrollView = ButtonScrollView()
     private let searchEngineScrollViewContent = UIView()
 
+    private lazy var defaultIcon: UIImage = {
+        return UIImage(named: "defaultFavicon")!
+    }()
+
     // Cell for the suggestion flow layout. Since heightForHeaderInSection is called *before*
     // cellForRowAtIndexPath, we create the cell to find its height before it's added to the table.
     private let suggestionCell = SuggestionCell(style: UITableViewCellStyle.Default, reuseIdentifier: nil)
@@ -76,6 +80,10 @@ class SearchViewController: SiteTableViewController, KeyboardHelperDelegate, Loa
     }
 
     override func viewDidLoad() {
+        view.backgroundColor = AppConstants.PanelBackgroundColor
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: UIBlurEffectStyle.Light))
+        view.addSubview(blur)
+
         super.viewDidLoad()
 
         KeyboardHelper.defaultHelper.addDelegate(self)
@@ -95,6 +103,10 @@ class SearchViewController: SiteTableViewController, KeyboardHelperDelegate, Loa
             make.left.greaterThanOrEqualTo(self.searchEngineScrollView).priorityHigh()
             make.right.lessThanOrEqualTo(self.searchEngineScrollView).priorityHigh()
             make.top.bottom.equalTo(self.searchEngineScrollView)
+        }
+
+        blur.snp_makeConstraints { make in
+            make.edges.equalTo(self.view)
         }
 
         suggestionCell.delegate = self
@@ -128,15 +140,24 @@ class SearchViewController: SiteTableViewController, KeyboardHelperDelegate, Loa
 
     private func layoutSuggestionsOptInPrompt() {
         if !(searchEngines?.shouldShowSearchSuggestionsOptIn ?? false) {
+            // Make sure any pending layouts are drawn so they don't get coupled
+            // with the "slide up" animation below.
             view.layoutIfNeeded()
+
+            // Set the prompt to nil so layoutTable() aligns the top of the table
+            // to the top of the view. We still need a reference to the prompt so
+            // we can remove it from the controller after the animation is done.
+            let prompt = suggestionPrompt
             suggestionPrompt = nil
             layoutTable()
+
             UIView.animateWithDuration(0.2,
                 animations: {
                     self.view.layoutIfNeeded()
+                    prompt?.alpha = 0
                 },
                 completion: { _ in
-                    self.suggestionPrompt?.removeFromSuperview()
+                    prompt?.removeFromSuperview()
                     return
                 })
             return
@@ -144,6 +165,11 @@ class SearchViewController: SiteTableViewController, KeyboardHelperDelegate, Loa
 
         let prompt = UIView()
         prompt.backgroundColor = PromptColor
+
+        let promptBottomBorder = UIView()
+        promptBottomBorder.backgroundColor = UIColor.blackColor().colorWithAlphaComponent(0.1)
+        prompt.addSubview(promptBottomBorder)
+
         // Insert behind the tableView so the tableView slides on top of it
         // when the prompt is dismissed.
         view.insertSubview(prompt, belowSubview: tableView)
@@ -183,6 +209,9 @@ class SearchViewController: SiteTableViewController, KeyboardHelperDelegate, Loa
         promptNoButton.addTarget(self, action: "SELdidClickOptInNo", forControlEvents: UIControlEvents.TouchUpInside)
         prompt.addSubview(promptNoButton)
 
+        // otherwise the label (i.e. question) is visited by VoiceOver *after* yes and no buttons
+        prompt.accessibilityElements = [promptImage, promptLabel, promptYesButton, promptNoButton]
+
         promptImage.snp_makeConstraints { make in
             make.left.equalTo(prompt).offset(PromptInsets.left)
             make.centerY.equalTo(prompt)
@@ -203,6 +232,12 @@ class SearchViewController: SiteTableViewController, KeyboardHelperDelegate, Loa
         promptYesButton.snp_makeConstraints { make in
             make.right.equalTo(promptNoButton.snp_leading).insets(PromptInsets)
             make.centerY.equalTo(prompt)
+        }
+
+        promptBottomBorder.snp_makeConstraints { make in
+            make.trailing.leading.equalTo(self.view)
+            make.top.equalTo(prompt.snp_bottom).offset(-1)
+            make.height.equalTo(1)
         }
 
         prompt.snp_makeConstraints { make in
@@ -242,7 +277,7 @@ class SearchViewController: SiteTableViewController, KeyboardHelperDelegate, Loa
             engineButton.imageView?.contentMode = UIViewContentMode.ScaleAspectFit
             engineButton.layer.backgroundColor = UIColor.whiteColor().CGColor
             engineButton.addTarget(self, action: "SELdidSelectEngine:", forControlEvents: UIControlEvents.TouchUpInside)
-            engineButton.accessibilityLabel = String(format: NSLocalizedString("%@ search", comment: "Label for search engine buttons. The argument corresponds to the name of the search engine."), engine.shortName)
+            engineButton.accessibilityLabel = String(format: NSLocalizedString("%@ search", tableName: "Search", comment: "Label for search engine buttons. The argument corresponds to the name of the search engine."), engine.shortName)
 
             engineButton.imageView?.snp_makeConstraints { make in
                 make.width.height.equalTo(OpenSearchEngine.PreferredIconSize)
@@ -297,6 +332,13 @@ class SearchViewController: SiteTableViewController, KeyboardHelperDelegate, Loa
         animateSearchEnginesWithKeyboard(state)
     }
 
+    override func viewWillTransitionToSize(size: CGSize, withTransitionCoordinator coordinator: UIViewControllerTransitionCoordinator) {
+        // The height of the suggestions row may change, so call reloadData() to recalculate cell heights.
+        coordinator.animateAlongsideTransition({ _ in
+            self.tableView.reloadData()
+        }, completion: nil)
+    }
+
     private func animateSearchEnginesWithKeyboard(keyboardState: KeyboardState) {
         layoutSearchEngineScrollView()
 
@@ -344,7 +386,7 @@ class SearchViewController: SiteTableViewController, KeyboardHelperDelegate, Loa
         })
     }
 
-    func loader(dataLoaded data: Cursor) {
+    func loader(dataLoaded data: Cursor<Site>) {
         self.data = data
         tableView.reloadData()
     }
@@ -354,7 +396,7 @@ extension SearchViewController: UITableViewDelegate {
     func tableView(tableView: UITableView, didSelectRowAtIndexPath indexPath: NSIndexPath) {
         let section = SearchListSection(rawValue: indexPath.section)!
         if section == SearchListSection.BookmarksAndHistory {
-            if let site = data[indexPath.row] as? Site {
+            if let site = data[indexPath.row] {
                 if let url = NSURL(string: site.url) {
                     searchDelegate?.searchViewController(self, didSelectURL: url)
                 }
@@ -392,15 +434,10 @@ extension SearchViewController: UITableViewDataSource {
 
         case .BookmarksAndHistory:
             let cell = super.tableView(tableView, cellForRowAtIndexPath: indexPath)
-            if let site = data[indexPath.row] as? Site {
+            if let site = data[indexPath.row] {
                 if let cell = cell as? TwoLineTableViewCell {
                     cell.setLines(site.title, detailText: site.url)
-                    if let img = site.icon {
-                        let imgUrl = NSURL(string: img.url)
-                        cell.imageView?.sd_setImageWithURL(imgUrl, placeholderImage: self.profile.favicons.defaultIcon)
-                    } else {
-                        cell.imageView?.image = self.profile.favicons.defaultIcon
-                    }
+                    cell.imageView?.setIcon(site.icon, withPlaceholder: self.defaultIcon)
                 }
             }
             return cell
@@ -464,6 +501,9 @@ private class SuggestionCell: UITableViewCell {
         separatorInset = UIEdgeInsetsZero
         selectionStyle = UITableViewCellSelectionStyle.None
 
+        container.backgroundColor = UIColor.clearColor()
+        contentView.backgroundColor = UIColor.clearColor()
+        backgroundColor = UIColor.clearColor()
         contentView.addSubview(container)
     }
 
@@ -504,8 +544,8 @@ private class SuggestionCell: UITableViewCell {
     private override func layoutSubviews() {
         super.layoutSubviews()
 
-        // The left bounds of the suggestions align with where text would be displayed.
-        let textLeft: CGFloat = 44
+        // The left bounds of the suggestions, aligned with where text would be displayed.
+        let textLeft: CGFloat = 48
 
         // The maximum width of the container, after which suggestions will wrap to the next line.
         let maxWidth = contentView.frame.width
@@ -557,8 +597,10 @@ private class SuggestionCell: UITableViewCell {
         contentView.frame = frame
         container.frame = frame
 
-        let imageY = (frame.size.height - 24) / 2
-        imageView!.frame = CGRectMake(10, imageY, 24, 24)
+        let imageSize = CGFloat(OpenSearchEngine.PreferredIconSize)
+        let imageX = (48 - imageSize) / 2
+        let imageY = (frame.size.height - imageSize) / 2
+        imageView!.frame = CGRectMake(imageX, imageY, imageSize, imageSize)
     }
 }
 
@@ -569,10 +611,11 @@ private class SuggestionButton: InsetButton {
     override init(frame: CGRect) {
         super.init(frame: frame)
 
-        setTitleColor(UIColor.darkGrayColor(), forState: UIControlState.Normal)
+        setTitleColor(AppConstants.HighlightBlue, forState: UIControlState.Normal)
+        setTitleColor(UIColor.whiteColor(), forState: UIControlState.Highlighted)
         titleLabel?.font = SuggestionFont
         backgroundColor = SuggestionBackgroundColor
-        layer.borderColor = SuggestionBackgroundColor.CGColor
+        layer.borderColor = SuggestionBorderColor.CGColor
         layer.borderWidth = SuggestionBorderWidth
         layer.cornerRadius = SuggestionCornerRadius
         contentEdgeInsets = SuggestionInsets
@@ -585,7 +628,7 @@ private class SuggestionButton: InsetButton {
     @objc
     override var highlighted: Bool {
         didSet {
-            backgroundColor = highlighted ? UIColor.grayColor() : SuggestionBackgroundColor
+            backgroundColor = highlighted ? AppConstants.HighlightBlue : SuggestionBackgroundColor
         }
     }
 }

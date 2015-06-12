@@ -20,6 +20,11 @@ class BrowserLocationView : UIView, UIGestureRecognizerDelegate {
     private var readerModeButton: ReaderModeButton!
     var readerModeButtonWidthConstraint: NSLayoutConstraint?
 
+    static var PlaceholderText: NSAttributedString {
+        let placeholderText = NSLocalizedString("Search or enter address", comment: "The text shown in the URL bar on about:home")
+        return NSAttributedString(string: placeholderText, attributes: [NSForegroundColorAttributeName: UIColor.grayColor()])
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         self.backgroundColor = UIColor.whiteColor()
@@ -36,8 +41,8 @@ class BrowserLocationView : UIView, UIGestureRecognizerDelegate {
         locationLabel.lineBreakMode = .ByClipping
         locationLabel.userInteractionEnabled = true
         locationLabel.setTranslatesAutoresizingMaskIntoConstraints(false)
-        // TODO: This label isn't useful for people. We probably want this to be the page title or URL (see Safari).
-        locationLabel.accessibilityLabel = NSLocalizedString("URL", comment: "Accessibility label for the URL location label")
+        locationLabel.accessibilityIdentifier = "url"
+        locationLabel.accessibilityTraits |= UIAccessibilityTraitButton
         addSubview(locationLabel)
 
         let tapGestureRecognizer = UITapGestureRecognizer(target: self, action: "SELtapLocationLabel:")
@@ -54,6 +59,8 @@ class BrowserLocationView : UIView, UIGestureRecognizerDelegate {
         addSubview(readerModeButton)
         readerModeButton.isAccessibilityElement = true
         readerModeButton.accessibilityLabel = NSLocalizedString("Reader Mode", comment: "Accessibility label for the reader mode button")
+
+        accessibilityElements = [lockImageView, locationLabel, readerModeButton]
     }
 
     override func updateConstraints() {
@@ -62,28 +69,28 @@ class BrowserLocationView : UIView, UIGestureRecognizerDelegate {
         let container = self
 
         lockImageView.snp_remakeConstraints { make in
-            make.centerY.equalTo(container).centerY
-            make.leading.equalTo(container).with.offset(8)
+            make.centerY.equalTo(container)
+            make.leading.equalTo(container).offset(8)
             make.width.equalTo(self.lockImageView.intrinsicContentSize().width)
         }
 
         locationLabel.snp_remakeConstraints { make in
             make.centerY.equalTo(container.snp_centerY)
             if self.url?.scheme == "https" {
-                make.leading.equalTo(self.lockImageView.snp_trailing).with.offset(8)
+                make.leading.equalTo(self.lockImageView.snp_trailing).offset(8)
             } else {
-                make.leading.equalTo(container).with.offset(8)
+                make.leading.equalTo(container).offset(8)
             }
 
             if self.readerModeButton.readerModeState == ReaderModeState.Unavailable {
-                make.trailing.equalTo(self).with.offset(-8)
+                make.trailing.equalTo(self).offset(-8)
             } else {
-                make.trailing.equalTo(self.readerModeButton.snp_leading).with.offset(-8)
+                make.trailing.equalTo(self.readerModeButton.snp_leading).offset(-8)
             }
         }
 
         readerModeButton.snp_remakeConstraints { make in
-            make.centerY.equalTo(container).centerY
+            make.centerY.equalTo(container)
             make.trailing.equalTo(self.snp_trailing).offset(-4)
 
             // We fix the width of the button (to the height of the view) to prevent content
@@ -125,17 +132,18 @@ class BrowserLocationView : UIView, UIGestureRecognizerDelegate {
     var url: NSURL? {
         didSet {
             lockImageView.hidden = (url?.scheme != "https")
-            let t = url?.absoluteString
-            if t?.hasPrefix("http://") ?? false {
-                locationLabel.text = t!.substringFromIndex(advance(t!.startIndex, 7))
-            } else if t?.hasPrefix("https://") ?? false {
-                locationLabel.text = t!.substringFromIndex(advance(t!.startIndex, 8))
-            } else if t == "about:home" {
-                let placeholderText = NSLocalizedString("Search or enter address", comment: "The text shown in the URL bar on about:home")
-                locationLabel.attributedText = NSAttributedString(string: placeholderText, attributes: [NSForegroundColorAttributeName: UIColor.grayColor()])
+            if let url = url?.absoluteString {
+                if url.hasPrefix("http://") ?? false {
+                    locationLabel.text = url.substringFromIndex(advance(url.startIndex, 7))
+                } else if url.hasPrefix("https://") ?? false {
+                    locationLabel.text = url.substringFromIndex(advance(url.startIndex, 8))
+                } else {
+                    locationLabel.text = url
+                }
             } else {
-                locationLabel.text = t
+                locationLabel.attributedText = BrowserLocationView.PlaceholderText
             }
+
             setNeedsUpdateConstraints()
         }
     }
